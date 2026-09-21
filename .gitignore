@@ -9,6 +9,7 @@
 *.exe
 *.test
 *.out
+/spotuify
 
 # Exports produced by the app
 /exports/
