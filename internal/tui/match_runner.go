@@ -89,13 +89,21 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 		}
 
 		var syncWarn string
-		if ndClient != nil && (writeRes.CoverPath != "" || full.Description != "") {
+		hasSyncable := writeRes.CoverPath != "" || full.Description != ""
+		switch {
+		case ndClient != nil && hasSyncable:
 			err := syncNavidromeMetadata(ctx, ndClient, cfg, writeRes.M3U8Path, writeRes.CoverPath, full.Description, func(text string) {
 				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: %s", sp.Name, text)})
 			})
 			if err != nil {
 				syncWarn = err.Error()
 			}
+		case ndClient == nil && hasSyncable:
+			// Otherwise this fails completely silently: the playlist looks
+			// done (matched, .m3u8 written) with no indication anywhere
+			// that its cover art/description never made it into Navidrome
+			// because the API creds in Settings aren't actually set.
+			syncWarn = "Navidrome server URL/username/password aren't set in Settings — cover art and description weren't uploaded"
 		}
 
 		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, playlist: full, results: results, write: writeRes, syncWarn: syncWarn})

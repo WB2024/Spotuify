@@ -283,8 +283,12 @@ type envKV struct {
 }
 
 // upsertEnvFile rewrites path, replacing the value of any line whose key
-// matches one in values, appending keys that weren't already present, and
-// leaving every other line (comments, blank lines, unrelated vars) intact.
+// matches one in values — including a commented-out placeholder line for
+// that key (e.g. "# SPOTUIFY_NAVIDROME_API_PASSWORD=", the shape a fresh
+// .env's optional settings start out in), which this uncomments as a side
+// effect of giving it a value — appending keys that weren't already
+// present in any form, and leaving every other line (comments that aren't
+// one of our keys, blank lines, unrelated vars) intact.
 func upsertEnvFile(path string, values []envKV) error {
 	var lines []string
 	if existing, err := os.ReadFile(path); err == nil {
@@ -299,10 +303,11 @@ func upsertEnvFile(path string, values []envKV) error {
 	seen := make(map[string]bool, len(values))
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		if trimmed == "" {
 			continue
 		}
-		key, _, ok := strings.Cut(trimmed, "=")
+		content := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
+		key, _, ok := strings.Cut(content, "=")
 		if !ok {
 			continue
 		}
