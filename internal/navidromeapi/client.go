@@ -1,10 +1,10 @@
 // Package navidromeapi is a small client for Navidrome's own REST API
 // (distinct from both the Subsonic-compatible API and the read-only
-// database access in internal/library). It exists for exactly one thing
-// right now: uploading a playlist's cover art, since Navidrome doesn't
-// pick up an image file sitting in a playlist's folder the way it
-// auto-imports the .m3u8 itself — that has to go through an authenticated
-// POST.
+// database access in internal/library). It handles the two things a
+// scanned-in .m3u8 can't carry on its own: a playlist's cover art (POST
+// .../image) and its description (Navidrome's "comment" field — .m3u8/
+// EXTM3U playlists have no way to set this from the file itself; only its
+// own .nsp Smart Playlist format supports an in-file comment).
 package navidromeapi
 
 import (
@@ -134,6 +134,85 @@ func (c *Client) UploadPlaylistImage(ctx context.Context, playlistID string, ima
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return fmt.Errorf("Navidrome rejected the cover art upload (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+// getPlaylist fetches a playlist's full JSON representation, as a generic
+// map rather than a fixed struct, so UpdatePlaylistComment can round-trip
+// every field Navidrome already has for it — a PUT that only sent
+// {"comment": ...} would risk Navidrome treating that as the playlist's
+// complete new state and clearing everything else (name, public, rules...).
+func (c *Client) getPlaylist(ctx context.Context, playlistID string) (map[string]any, error) {
+	token, err := c.authToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("%s/api/playlist/%s", c.baseURL, playlistID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("x-nd-authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching playlist from Navidrome: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Navidrome rejected fetching the playlist (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decoding playlist response: %w", err)
+	}
+	return out, nil
+}
+
+// UpdatePlaylistComment sets a Navidrome playlist's comment/description
+// field — shown as the playlist's description in Navidrome/Feishin's UI —
+// preserving every other field Navidrome already has for it (see
+// getPlaylist).
+func (c *Client) UpdatePlaylistComment(ctx context.Context, playlistID, comment string) error {
+	token, err := c.authToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	current, err := c.getPlaylist(ctx, playlistID)
+	if err != nil {
+		return err
+	}
+	current["comment"] = comment
+
+	body, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("%s/api/playlist/%s", c.baseURL, playlistID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-nd-authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("updating playlist description: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		return fmt.Errorf("Navidrome rejected the description update (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
 }

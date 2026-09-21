@@ -261,25 +261,67 @@ For each playlist, under `<M3U8 output directory>/<playlist name>/`:
   This is a local file for browsing outside Navidrome; see below for
   getting it to show up *inside* Navidrome/Feishin's own UI.
 
-### Getting cover art to show up inside Navidrome/Feishin
+### Getting cover art and description to show up inside Navidrome/Feishin
 
-A `cover.jpg` sitting in a playlist's folder does **not** get picked up by
-Navidrome as that playlist's art — verified directly against the database
-(a playlist scanned in from a folder with a `cover.jpg` right next to its
-`.m3u8` still has an empty `uploaded_image` column). Navidrome only shows
-cover art on a playlist once it's been uploaded through its own REST API
-(`POST /api/playlist/{id}/image`), the same call its web UI makes when you
-manually set one.
+Two things a scanned-in `.m3u8` can't carry on its own:
+
+- **Cover art.** A `cover.jpg` sitting in a playlist's folder does **not**
+  get picked up by Navidrome as that playlist's art — verified directly
+  against the database (a playlist scanned in from a folder with a
+  `cover.jpg` right next to its `.m3u8` still has an empty `uploaded_image`
+  column). Navidrome only shows cover art once it's been uploaded through
+  its own REST API (`POST /api/playlist/{id}/image`), the same call its
+  web UI makes when you manually set one.
+- **Description.** Without one, Navidrome shows a generic "Auto-imported
+  from '\<file\>.m3u8'" placeholder — confirmed none of this user's
+  existing Spotify-sourced playlists have ever had a real description,
+  regardless of what tool created them, because `.m3u8`/`EXTM3U` simply
+  has no field for it (only Navidrome's own `.nsp` Smart Playlist format
+  supports an in-file comment). Setting a real one means updating
+  Navidrome's `comment` field via `PUT /api/playlist/{id}` after the fact —
+  read-modify-write (GET the playlist first, change only `comment`, PUT
+  the whole thing back), so nothing else on the playlist gets clobbered.
 
 If you fill in **Navidrome server URL / username / password** in Settings
-("Navidrome Cover Art Upload"), Spotuify does this for you automatically
-after writing each playlist: it logs in (`POST /auth/login`) for a JWT,
-waits for Navidrome's own scanner to pick up the new `.m3u8` (checking its
-database every couple of seconds, since there's no ID to upload against
-until Navidrome has created the playlist row itself), then uploads the
-cover image. Leave those fields blank to skip this — the `.m3u8` and local
-`cover.jpg` still get written either way, the playlist just won't show art
-inside Navidrome/Feishin until you set one manually.
+("Navidrome Cover Art Upload"), Spotuify does both automatically after
+writing each playlist: logs in (`POST /auth/login`) for a JWT, waits for
+Navidrome's own scanner to pick up the new `.m3u8` (checking its database
+every couple of seconds, since there's no ID to act on until Navidrome has
+created the playlist row itself), uploads the cover image, and sets the
+description to the playlist's actual Spotify description (if it has one).
+Leave those fields blank to skip this entirely — the `.m3u8` and local
+`cover.jpg` still get written either way, the playlist just won't show
+art or a real description inside Navidrome/Feishin until you set them
+manually.
+
+### Re-running a match: updates, not duplicates
+
+Spotuify always writes a given playlist to the same path
+(`<name>/<name>.m3u8`), and Navidrome keys an imported playlist by that
+path — so re-matching the same playlist (even after the Spotify-side
+tracks changed) updates the existing Navidrome playlist in place. Verified
+directly: re-ran the same playlist through Spotuify three times across
+different points in this build, and the database shows exactly one
+`playlist` row for it throughout, with `playlist_tracks` always matching
+the current track count exactly (no leftover rows from earlier runs).
+
+The one real edge case: since the path is derived from the *name* alone,
+two genuinely different Spotify playlists that happen to share an
+identical name would both resolve to the same file — the second one
+matched would silently overwrite the first's `.m3u8`/cover, not create a
+second Navidrome playlist. This mirrors the existing "Spotify/SR/..."
+convention (no ID in the path), so it's consistent with how this library
+is already organized, but worth knowing about if you ever have two
+same-named playlists on Spotify.
+
+What *does* create a genuine duplicate: changing how Spotuify names its
+output (as happened once during this project, switching from
+`<slug>-<spotify-id>/playlist.m3u8` to `<name>/<name>.m3u8`) leaves the
+old path's playlist row behind under its old name until Navidrome's own
+scanner purges entries whose backing file is gone (`ND_SCANNER_PURGEMISSING`
+in its config) — on its normal schedule, or immediately if you trigger a
+scan manually from Navidrome's UI. Not something a normal re-match causes,
+only a one-off consequence of changing the output convention.
 
 ### Navidrome picks these up automatically
 

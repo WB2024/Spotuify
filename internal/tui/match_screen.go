@@ -68,12 +68,12 @@ func (r matchRow) methodLabel() string {
 // playlistOutcome summarizes one playlist's match+write run, for the Done
 // screen.
 type playlistOutcome struct {
-	name        string
-	dir         string
-	matched     int
-	total       int
-	err         error
-	coverUpload string // non-empty: cover.jpg written but not uploaded to Navidrome, and why
+	name          string
+	dir           string
+	matched       int
+	total         int
+	err           error
+	navidromeSync string // non-empty: cover art/description not synced to Navidrome, and why
 }
 
 // MatchModel is the "Match to Local Library" screen: it owns login, the
@@ -431,7 +431,7 @@ func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchA
 	case matchEventPlaylistDone:
 		m.currentStatus = ""
 		m.queueDone++
-		outcome := playlistOutcome{name: ev.playlistName, total: len(ev.results), coverUpload: ev.coverUploadWarn}
+		outcome := playlistOutcome{name: ev.playlistName, total: len(ev.results), navidromeSync: ev.syncWarn}
 		if ev.err != nil {
 			outcome.err = ev.err
 		}
@@ -561,8 +561,8 @@ func (m MatchModel) viewOutcomes() string {
 			continue
 		}
 		b.WriteString(dimStyle.Render(fmt.Sprintf("%s: %d/%d matched → %s", o.name, o.matched, o.total, o.dir)) + "\n")
-		if o.coverUpload != "" {
-			b.WriteString(warnStyle.Render(fmt.Sprintf("    cover art: %s", o.coverUpload)) + "\n")
+		if o.navidromeSync != "" {
+			b.WriteString(warnStyle.Render(fmt.Sprintf("    Navidrome sync: %s", o.navidromeSync)) + "\n")
 		}
 	}
 	return b.String()
