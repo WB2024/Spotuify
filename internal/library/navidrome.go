@@ -15,6 +15,7 @@ type Index struct {
 	Tracks []Track
 	byISRC map[string]*Track
 	byMBID map[string]*Track
+	byPath map[string]*Track
 }
 
 // ByISRC returns the local track carrying the given ISRC, if any.
@@ -33,6 +34,17 @@ func (idx *Index) ByMBID(mbid string) (*Track, bool) {
 		return nil, false
 	}
 	t, ok := idx.byMBID[mbid]
+	return t, ok
+}
+
+// ByPath returns the indexed track at the given absolute path, if Navidrome
+// has already scanned it — used to show Artist/Album metadata for a file
+// the user manually picks to correct a match, rather than just a filename.
+func (idx *Index) ByPath(path string) (*Track, bool) {
+	if idx == nil || path == "" {
+		return nil, false
+	}
+	t, ok := idx.byPath[path]
 	return t, ok
 }
 
@@ -151,9 +163,10 @@ func parseISRCTag(tagsJSON string) []string {
 }
 
 func buildIndex(tracks []Track) *Index {
-	idx := &Index{Tracks: tracks, byISRC: make(map[string]*Track), byMBID: make(map[string]*Track)}
+	idx := &Index{Tracks: tracks, byISRC: make(map[string]*Track), byMBID: make(map[string]*Track), byPath: make(map[string]*Track, len(tracks))}
 	for i := range idx.Tracks {
 		t := &idx.Tracks[i]
+		idx.byPath[t.Path] = t
 
 		isrcs := t.ISRCAll
 		if len(isrcs) == 0 && t.ISRC != "" {

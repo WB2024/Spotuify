@@ -302,12 +302,21 @@ func (e ExportModel) Update(msg tea.Msg) (ExportModel, tea.Cmd, exportAction) {
 
 	switch e.state {
 	case exportStateList:
+		if d := wheelDelta(msg); d != 0 {
+			scrollList(&e.list, d)
+			return e, nil, exportActionNone
+		}
 		var cmd tea.Cmd
 		e.list, cmd = e.list.Update(msg)
 		return e, cmd, exportActionNone
 	case exportStateExporting, exportStateDone:
-		// lets mouse-wheel scrolling reach the table for anything that
-		// isn't one of the message types already handled above
+		// bubbles/table (v1.0.0) has no mouse handling of its own, so the
+		// wheel has to be translated into cursor moves by hand — forwarding
+		// the raw tea.MouseMsg to tbl.Update does nothing.
+		if d := wheelDelta(msg); d != 0 {
+			scrollTable(&e.tbl, d)
+			return e, nil, exportActionNone
+		}
 		var cmd tea.Cmd
 		e.tbl, cmd = e.tbl.Update(msg)
 		return e, cmd, exportActionNone

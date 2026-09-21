@@ -31,9 +31,10 @@ import (
 type Method string
 
 const (
-	MethodISRC  Method = "isrc"
-	MethodFuzzy Method = "fuzzy"
-	MethodNone  Method = "missing"
+	MethodISRC   Method = "isrc"
+	MethodFuzzy  Method = "fuzzy"
+	MethodManual Method = "manual" // user picked the file explicitly, overriding whatever (if anything) matched automatically
+	MethodNone   Method = "missing"
 )
 
 // Result is the outcome of matching one playlist track item.

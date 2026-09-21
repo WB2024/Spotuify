@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -18,6 +19,7 @@ import (
 
 	"spotuify/internal/config"
 	"spotuify/internal/library"
+	"spotuify/internal/m3u8"
 	"spotuify/internal/match"
 	"spotuify/internal/spotifyapi"
 )
@@ -43,26 +45,28 @@ const (
 	matchActionBack
 )
 
-// matchRow is one track's result, flattened for the results table. Kept
-// separate from match.Result so the table can hold rows spanning several
-// playlists in one batch run.
-type matchRow struct {
-	playlist string
-	track    string
-	artist   string
-	method   match.Method
-	note     string // matched file's base name, or the error/empty for missing
+// audioExtensions gates which files the manual-match file picker lets the
+// user select — broad enough to cover this library without needing a
+// filesystem scan to determine what's audio. Anything else (and every
+// folder) still browses fine, just can't be picked.
+var audioExtensions = []string{".mp3", ".flac", ".m4a", ".ogg", ".opus", ".wav", ".aac", ".wma", ".alac", ".aiff"}
+
+// playlistRun holds one playlist's live match state for this batch run: the
+// full playlist (kept around so a manual correction can re-render the
+// .m3u8 without re-fetching anything) plus its per-track results, mutated
+// in place when the user picks a different file for a track.
+type playlistRun struct {
+	playlist *spotifyapi.FullPlaylist
+	results  []match.Result
+	outcome  playlistOutcome
 }
 
-func (r matchRow) methodLabel() string {
-	switch r.method {
-	case match.MethodISRC:
-		return "✓ isrc"
-	case match.MethodFuzzy:
-		return "~ fuzzy"
-	default:
-		return "✗ missing"
-	}
+// trackRef locates one match.Result inside runs — what each results-table
+// row actually points at, so editing a row can mutate the real result (and
+// rewrite its playlist's .m3u8) instead of a display-only copy.
+type trackRef struct {
+	runIdx    int
+	resultIdx int
 }
 
 // playlistOutcome summarizes one playlist's match+write run, for the Done
@@ -96,7 +100,7 @@ type MatchModel struct {
 	prog progress.Model
 	tbl  table.Model
 
-	width, height int
+	width, height, contentHeight int
 
 	user *spotifyapi.User
 	err  error
@@ -108,10 +112,17 @@ type MatchModel struct {
 
 	matchEvents   chan matchEvent
 	currentStatus string
-	rows          []matchRow
-	outcomes      []playlistOutcome
+	runs          []*playlistRun
+	trackRefs     []trackRef
 	queueLen      int
 	queueDone     int
+
+	// Manual-match file picker overlay, active only in matchStateDone.
+	editingFile bool
+	editingRef  trackRef
+	editingRoot string
+	editErr     string
+	fp          filepicker.Model
 }
 
 func newMatchModel(cfg *config.Config) MatchModel {
@@ -138,19 +149,52 @@ func newMatchModel(cfg *config.Config) MatchModel {
 	return MatchModel{cfg: cfg, spin: sp, list: l, prog: pg, tbl: tbl}
 }
 
+// newLibraryFilePicker builds a fresh, library-scoped file picker rooted at
+// root. Built fresh on every edit rather than reused: several of
+// filepicker.Model's cursor/navigation-stack fields are unexported, so
+// there's no way to reset a previously-used one back to a clean state from
+// outside the package.
+func newLibraryFilePicker(root string, height int) filepicker.Model {
+	fp := filepicker.New()
+	fp.CurrentDirectory = root
+	fp.AllowedTypes = audioExtensions
+	fp.FileAllowed = true
+	fp.DirAllowed = false
+	fp.ShowHidden = false
+	fp.AutoHeight = false
+	fp.SetHeight(height)
+	fp.Styles.Cursor = fp.Styles.Cursor.Foreground(accent)
+	fp.Styles.Directory = fp.Styles.Directory.Foreground(accent)
+	fp.Styles.Selected = fp.Styles.Selected.Foreground(spotifyGreen).Bold(true)
+	return fp
+}
+
+func matchMethodLabel(method match.Method) string {
+	switch method {
+	case match.MethodISRC:
+		return "✓ isrc"
+	case match.MethodFuzzy:
+		return "~ fuzzy"
+	case match.MethodManual:
+		return "✎ manual"
+	default:
+		return "✗ missing"
+	}
+}
+
 // SetSize propagates a terminal resize to every widget this screen owns.
 func (m *MatchModel) SetSize(width, height int) {
 	m.width, m.height = width, height
-	contentHeight := height - 6
-	if contentHeight < 5 {
-		contentHeight = 5
+	m.contentHeight = height - 6
+	if m.contentHeight < 5 {
+		m.contentHeight = 5
 	}
 
 	listW := (width * 3) / 5
 	if listW < 30 {
 		listW = width
 	}
-	m.list.SetSize(listW, contentHeight)
+	m.list.SetSize(listW, m.contentHeight)
 
 	m.prog.Width = width - 4
 	if m.prog.Width < 10 {
@@ -158,8 +202,10 @@ func (m *MatchModel) SetSize(width, height int) {
 	}
 
 	m.tbl.SetWidth(width)
-	m.tbl.SetHeight(contentHeight)
+	m.tbl.SetHeight(m.contentHeight)
 	m.tbl.SetColumns(matchTableColumns(width))
+
+	m.fp.SetHeight(m.contentHeight)
 }
 
 func matchTableColumns(width int) []table.Column {
@@ -206,7 +252,12 @@ func (m MatchModel) Keys() help.KeyMap {
 		return matchListKeys
 	case matchStateMatching, matchStateLoadingLibrary:
 		return exportRunKeys
-	case matchStateDone, matchStateFatal:
+	case matchStateDone:
+		if m.editingFile {
+			return matchEditKeys
+		}
+		return matchDoneKeys
+	case matchStateFatal:
 		return exportDoneKeys
 	default:
 		return exportRunKeys
@@ -273,10 +324,35 @@ func (m MatchModel) Update(msg tea.Msg) (MatchModel, tea.Cmd, matchAction) {
 
 	switch m.state {
 	case matchStateList:
+		if d := wheelDelta(msg); d != 0 {
+			scrollList(&m.list, d)
+			return m, nil, matchActionNone
+		}
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		return m, cmd, matchActionNone
-	case matchStateMatching, matchStateDone:
+	case matchStateMatching:
+		if d := wheelDelta(msg); d != 0 {
+			scrollTable(&m.tbl, d)
+			return m, nil, matchActionNone
+		}
+		var cmd tea.Cmd
+		m.tbl, cmd = m.tbl.Update(msg)
+		return m, cmd, matchActionNone
+	case matchStateDone:
+		if m.editingFile {
+			// Forwards everything, notably the file picker's own
+			// unexported readDirMsg it sends itself after Init()/opening a
+			// folder — without this it would never learn what's in the
+			// directory it just navigated to.
+			var cmd tea.Cmd
+			m.fp, cmd = m.fp.Update(msg)
+			return m, cmd, matchActionNone
+		}
+		if d := wheelDelta(msg); d != 0 {
+			scrollTable(&m.tbl, d)
+			return m, nil, matchActionNone
+		}
 		var cmd tea.Cmd
 		m.tbl, cmd = m.tbl.Update(msg)
 		return m, cmd, matchActionNone
@@ -342,15 +418,95 @@ func (m MatchModel) handleKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction)
 		}
 		return m, nil, matchActionNone
 
-	case matchStateDone, matchStateFatal:
-		if key.Matches(msg, exportDoneKeys.Continue) {
+	case matchStateDone:
+		if m.editingFile {
+			return m.handleFilePickerKey(msg)
+		}
+		switch {
+		case key.Matches(msg, matchDoneKeys.Back):
 			return m, nil, matchActionBack
+		case key.Matches(msg, matchDoneKeys.Edit):
+			return m.beginEdit()
 		}
 		var cmd tea.Cmd
 		m.tbl, cmd = m.tbl.Update(msg)
 		return m, cmd, matchActionNone
+
+	case matchStateFatal:
+		if key.Matches(msg, exportDoneKeys.Continue) {
+			return m, nil, matchActionBack
+		}
+		return m, nil, matchActionNone
 	}
 
+	return m, nil, matchActionNone
+}
+
+// beginEdit opens the file-picker overlay, scoped to the configured
+// Navidrome music root, for the track currently selected in the results
+// table.
+func (m MatchModel) beginEdit() (MatchModel, tea.Cmd, matchAction) {
+	cursor := m.tbl.Cursor()
+	if cursor < 0 || cursor >= len(m.trackRefs) {
+		return m, nil, matchActionNone
+	}
+
+	m.editingRef = m.trackRefs[cursor]
+	m.editingRoot = filepath.Clean(m.cfg.NavidromeMusicPath)
+	m.editingFile = true
+	m.editErr = ""
+	m.fp = newLibraryFilePicker(m.editingRoot, m.contentHeight)
+
+	return m, m.fp.Init(), matchActionNone
+}
+
+// handleFilePickerKey drives the file-picker overlay. It intercepts the
+// picker's own "go back a directory" keys (which include esc) right at the
+// scoped root: bubbles/filepicker has no notion of a floor, so left to
+// itself it would happily walk above the library root the picker is
+// supposed to be confined to. At the root, those same keys instead cancel
+// the edit and close the overlay.
+func (m MatchModel) handleFilePickerKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction) {
+	if key.Matches(msg, m.fp.KeyMap.Back) && m.fp.CurrentDirectory == m.editingRoot {
+		m.editingFile = false
+		m.editErr = ""
+		return m, nil, matchActionNone
+	}
+
+	var cmd tea.Cmd
+	m.fp, cmd = m.fp.Update(msg)
+
+	if didSelect, path := m.fp.DidSelectFile(msg); didSelect {
+		return m.applyManualMatch(path)
+	}
+	if didSelectDisabled, _ := m.fp.DidSelectDisabledFile(msg); didSelectDisabled {
+		m.editErr = "that file type isn't supported"
+	}
+
+	return m, cmd, matchActionNone
+}
+
+// applyManualMatch records the user's chosen file as the track's match,
+// persists it immediately (rewriting just that playlist's .m3u8 and
+// missing.txt — no network, no cover re-download), and closes the overlay.
+func (m MatchModel) applyManualMatch(path string) (MatchModel, tea.Cmd, matchAction) {
+	m.editingFile = false
+	m.editErr = ""
+
+	run := m.runs[m.editingRef.runIdx]
+	r := &run.results[m.editingRef.resultIdx]
+	r.Method = match.MethodManual
+	r.LocalPath = path
+	r.Confidence = 1
+
+	if res, err := m3u8.Rewrite(m.cfg.M3U8Dir, run.playlist, run.results); err != nil {
+		m.editErr = "saving playlist: " + err.Error()
+	} else {
+		run.outcome.matched = res.Matched
+		run.outcome.dir = res.Dir
+	}
+
+	m.tbl.SetRows(m.tableRows())
 	return m, nil, matchActionNone
 }
 
@@ -406,8 +562,8 @@ func (m MatchModel) startMatching() (MatchModel, tea.Cmd, matchAction) {
 		return m, nil, matchActionNone
 	}
 
-	m.rows = nil
-	m.outcomes = nil
+	m.runs = nil
+	m.trackRefs = nil
 	m.currentStatus = ""
 	m.queueLen = len(queue)
 	m.queueDone = 0
@@ -439,28 +595,16 @@ func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchA
 			outcome.dir = ev.write.Dir
 			outcome.matched = ev.write.Matched
 		}
-		m.outcomes = append(m.outcomes, outcome)
 
-		for _, r := range ev.results {
+		runIdx := len(m.runs)
+		m.runs = append(m.runs, &playlistRun{playlist: ev.playlist, results: ev.results, outcome: outcome})
+		for i, r := range ev.results {
 			if r.Item.Track == nil {
 				continue
 			}
-			note := ""
-			switch {
-			case r.Method != match.MethodNone && r.LocalPath != "":
-				note = filepath.Base(r.LocalPath)
-			case ev.err != nil:
-				note = "error: " + ev.err.Error()
-			}
-			m.rows = append(m.rows, matchRow{
-				playlist: ev.playlistName,
-				track:    r.Item.Track.Name,
-				artist:   artistList(r.Item.Track.Artists),
-				method:   r.Method,
-				note:     note,
-			})
+			m.trackRefs = append(m.trackRefs, trackRef{runIdx: runIdx, resultIdx: i})
 		}
-		m.tbl.SetRows(rowsToMatchTable(m.rows))
+		m.tbl.SetRows(m.tableRows())
 		m.tbl.GotoBottom()
 
 		pct := float64(m.queueDone) / float64(m.queueLen)
@@ -469,19 +613,48 @@ func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchA
 
 	case matchEventAllDone:
 		m.state = matchStateDone
+		if len(m.trackRefs) > 0 {
+			m.tbl.SetCursor(0)
+		}
 		return m, nil, matchActionNone
 	}
 	return m, nil, matchActionNone
 }
 
-func rowsToMatchTable(rows []matchRow) []table.Row {
-	out := make([]table.Row, len(rows))
-	for i, r := range rows {
-		track := r.track
-		if r.artist != "" {
-			track = r.artist + " – " + r.track
+// resultAt returns the playlist name and match result for the given table
+// row index, if valid.
+func (m MatchModel) resultAt(row int) (playlistName string, r match.Result, ok bool) {
+	if row < 0 || row >= len(m.trackRefs) {
+		return "", match.Result{}, false
+	}
+	ref := m.trackRefs[row]
+	run := m.runs[ref.runIdx]
+	return run.playlist.Name, run.results[ref.resultIdx], true
+}
+
+func (m MatchModel) tableRows() []table.Row {
+	out := make([]table.Row, len(m.trackRefs))
+	for i, ref := range m.trackRefs {
+		run := m.runs[ref.runIdx]
+		r := run.results[ref.resultIdx]
+
+		track := ""
+		if r.Item.Track != nil {
+			track = r.Item.Track.Name
+			if artist := artistList(r.Item.Track.Artists); artist != "" {
+				track = artist + " – " + track
+			}
 		}
-		out[i] = table.Row{r.playlist, track, r.methodLabel(), r.note}
+
+		note := ""
+		switch {
+		case r.LocalPath != "":
+			note = filepath.Base(r.LocalPath)
+		case run.outcome.err != nil:
+			note = "error: " + run.outcome.err.Error()
+		}
+
+		out[i] = table.Row{run.playlist.Name, track, matchMethodLabel(r.Method), note}
 	}
 	return out
 }
@@ -516,22 +689,28 @@ func (m MatchModel) View() string {
 		return m.viewBatch(fmt.Sprintf("Matching %d/%d playlists...", m.queueDone, m.queueLen))
 
 	case matchStateDone:
-		isrcN, fuzzyN, missN := 0, 0, 0
-		for _, r := range m.rows {
-			switch r.method {
+		if m.editingFile {
+			return m.viewFilePicker()
+		}
+		isrcN, fuzzyN, manualN, missN := 0, 0, 0, 0
+		for _, ref := range m.trackRefs {
+			switch m.runs[ref.runIdx].results[ref.resultIdx].Method {
 			case match.MethodISRC:
 				isrcN++
 			case match.MethodFuzzy:
 				fuzzyN++
+			case match.MethodManual:
+				manualN++
 			default:
 				missN++
 			}
 		}
-		summary := fmt.Sprintf("Done — %s  %s  %s",
+		summary := fmt.Sprintf("Done — %s  %s  %s  %s",
 			badgeDone.Render(fmt.Sprintf("%d isrc", isrcN)),
 			warnStyle.Render(fmt.Sprintf("%d fuzzy", fuzzyN)),
+			accentStyle.Render(fmt.Sprintf("%d manual", manualN)),
 			badgeFailed.Render(fmt.Sprintf("%d missing", missN)))
-		return m.viewBatch(summary) + "\n" + m.viewOutcomes()
+		return m.viewDone(summary)
 
 	case matchStateFatal:
 		return errorStyle.Render("Error: "+m.err.Error()) + "\n"
@@ -553,9 +732,113 @@ func (m MatchModel) viewBatch(heading string) string {
 	return b.String()
 }
 
+// viewDone renders the finished results table alongside a detail panel for
+// the currently selected track (full artist/album/path — the table itself
+// only has room for a trimmed filename) and, below both, each playlist's
+// write outcome.
+func (m MatchModel) viewDone(heading string) string {
+	var b strings.Builder
+	b.WriteString(headerStyle.Render(heading) + "\n\n")
+
+	tableW := (m.width * 3) / 5
+	detailW := m.width - tableW - 3
+	if detailW < 28 || m.width < 90 {
+		m.tbl.SetWidth(m.width)
+		m.tbl.SetColumns(matchTableColumns(m.width))
+		m.tbl.SetRows(m.tableRows())
+		b.WriteString(m.tbl.View())
+		b.WriteString("\n")
+		b.WriteString(m.renderTrackDetail(m.width - 4))
+	} else {
+		m.tbl.SetWidth(tableW)
+		m.tbl.SetColumns(matchTableColumns(tableW))
+		m.tbl.SetRows(m.tableRows())
+		detail := panelStyle.Width(detailW).Height(m.contentHeight - 2).Render(m.renderTrackDetail(detailW - 2))
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, m.tbl.View(), "  ", detail))
+	}
+
+	if m.editErr != "" {
+		b.WriteString("\n" + errorStyle.Render(m.editErr))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(m.viewOutcomes())
+	return b.String()
+}
+
+func (m MatchModel) renderTrackDetail(width int) string {
+	playlistName, r, ok := m.resultAt(m.tbl.Cursor())
+	if !ok || r.Item.Track == nil {
+		return fadedStyle.Render("No track selected.")
+	}
+	t := r.Item.Track
+
+	var b strings.Builder
+	b.WriteString(panelTitleStyle.Render(t.Name) + "\n\n")
+
+	row := func(label, value string) {
+		if value == "" {
+			return
+		}
+		b.WriteString(dimStyle.Render(fmt.Sprintf("%-9s", label)) + bodyStyle.Width(width-9).Render(value) + "\n")
+	}
+
+	row("Artist", artistList(t.Artists))
+	row("Album", t.Album.Name)
+	row("Playlist", playlistName)
+	b.WriteString(dimStyle.Render(fmt.Sprintf("%-9s", "Method")) + methodDetailStyle(r.Method).Render(matchMethodLabel(r.Method)) + "\n")
+
+	b.WriteString("\n" + dimStyle.Render("Path") + "\n")
+	if r.LocalPath != "" {
+		b.WriteString(bodyStyle.Width(width).Render(r.LocalPath) + "\n")
+	} else {
+		b.WriteString(fadedStyle.Render("(not matched)") + "\n")
+	}
+
+	b.WriteString("\n" + fadedStyle.Render("enter to fix this match"))
+	return b.String()
+}
+
+func methodDetailStyle(method match.Method) lipgloss.Style {
+	switch method {
+	case match.MethodISRC:
+		return badgeDone
+	case match.MethodFuzzy:
+		return warnStyle
+	case match.MethodManual:
+		return accentStyle
+	default:
+		return badgeFailed
+	}
+}
+
+// viewFilePicker renders the manual-match overlay: which track is being
+// fixed, up top, and the library-scoped file picker below it.
+func (m MatchModel) viewFilePicker() string {
+	playlistName, r, ok := m.resultAt(m.tbl.Cursor())
+
+	var b strings.Builder
+	b.WriteString(headerStyle.Render("Fix match") + "\n\n")
+	if ok && r.Item.Track != nil {
+		track := r.Item.Track.Name
+		if artist := artistList(r.Item.Track.Artists); artist != "" {
+			track = artist + " – " + track
+		}
+		b.WriteString(dimStyle.Render(fmt.Sprintf("%s  ·  %s", playlistName, track)) + "\n")
+	}
+	b.WriteString(fadedStyle.Render(m.editingRoot) + "\n\n")
+
+	if m.editErr != "" {
+		b.WriteString(errorStyle.Render(m.editErr) + "\n\n")
+	}
+
+	b.WriteString(m.fp.View())
+	return b.String()
+}
+
 func (m MatchModel) viewOutcomes() string {
 	var b strings.Builder
-	for _, o := range m.outcomes {
+	for _, run := range m.runs {
+		o := run.outcome
 		if o.err != nil {
 			b.WriteString(errorStyle.Render(fmt.Sprintf("✗ %s: %v", o.name, o.err)) + "\n")
 			continue
@@ -569,11 +852,6 @@ func (m MatchModel) viewOutcomes() string {
 }
 
 func (m MatchModel) viewList() string {
-	contentHeight := m.height - 6
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
-
 	listW := (m.width * 3) / 5
 	if listW < 30 {
 		return m.list.View()
@@ -583,7 +861,7 @@ func (m MatchModel) viewList() string {
 		return m.list.View()
 	}
 
-	detail := panelStyle.Width(detailW).Height(contentHeight - 2).Render(m.renderDetail(detailW - 2))
+	detail := panelStyle.Width(detailW).Height(m.contentHeight - 2).Render(m.renderDetail(detailW - 2))
 	return lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), "  ", detail)
 }
 

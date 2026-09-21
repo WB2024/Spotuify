@@ -22,14 +22,15 @@ import (
 
 // Result describes what was written for one playlist.
 type Result struct {
-	Dir          string
-	M3U8Path     string
-	MissingPath  string // empty if nothing was missing
-	CoverPath    string // empty if no cover art was available/downloaded
-	Matched      int
-	MatchedISRC  int
-	MatchedFuzzy int
-	Missing      int
+	Dir           string
+	M3U8Path      string
+	MissingPath   string // empty if nothing was missing
+	CoverPath     string // empty if no cover art was available/downloaded
+	Matched       int
+	MatchedISRC   int
+	MatchedFuzzy  int
+	MatchedManual int
+	Missing       int
 }
 
 // Write renders match results for one playlist into <dir>/<playlist name>/:
@@ -77,6 +78,42 @@ func Write(ctx context.Context, httpClient *http.Client, dir string, playlist *s
 	return res, nil
 }
 
+// Rewrite re-renders just the ".m3u8" (+ "missing.txt", if still relevant)
+// for a playlist already written by Write — no cover art, no network. Used
+// to persist a manual match correction instantly: the playlist's folder
+// already exists, so this only touches the two text files, reusing the
+// exact same layout Write produced so Navidrome's rescan sees a normal
+// update rather than a different playlist.
+func Rewrite(dir string, playlist *spotifyapi.FullPlaylist, results []match.Result) (*Result, error) {
+	name := sanitizeFilename(playlist.Name)
+	outDir := filepath.Join(dir, name)
+
+	res := &Result{Dir: outDir}
+
+	m3u8Path := filepath.Join(outDir, name+".m3u8")
+	if err := writeM3U8(m3u8Path, outDir, playlist.Name, results, res); err != nil {
+		return nil, fmt.Errorf("writing %s.m3u8: %w", name, err)
+	}
+	res.M3U8Path = m3u8Path
+
+	missingPath := filepath.Join(outDir, "missing.txt")
+	if res.Missing > 0 {
+		if err := writeMissing(missingPath, playlist.Name, results); err != nil {
+			return nil, fmt.Errorf("writing missing.txt: %w", err)
+		}
+		res.MissingPath = missingPath
+	} else {
+		// A track that used to be missing may now be matched — remove a
+		// stale missing.txt left over from the previous write so it
+		// doesn't claim tracks are missing that no longer are.
+		if err := os.Remove(missingPath); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("removing stale missing.txt: %w", err)
+		}
+	}
+
+	return res, nil
+}
+
 // navidromeGroup is the folder Navidrome/Feishin group Spotuify-generated
 // playlists under in their playlist sidebar — Navidrome treats "/" in a
 // #PLAYLIST directive as a UI folder hierarchy, not a filesystem path.
@@ -98,6 +135,8 @@ func writeM3U8(path, outDir, playlistName string, results []match.Result, res *R
 			res.MatchedISRC++
 		case match.MethodFuzzy:
 			res.MatchedFuzzy++
+		case match.MethodManual:
+			res.MatchedManual++
 		default:
 			res.Missing++
 			continue

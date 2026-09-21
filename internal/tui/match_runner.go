@@ -29,6 +29,7 @@ type matchEvent struct {
 	kind         matchEventKind
 	text         string // for matchEventStatus
 	playlistName string // for matchEventPlaylistDone
+	playlist     *spotifyapi.FullPlaylist
 	results      []match.Result
 	write        *m3u8.Result
 	err          error  // fetch/write failure for this playlist, if any
@@ -97,7 +98,7 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			}
 		}
 
-		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, results: results, write: writeRes, syncWarn: syncWarn})
+		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, playlist: full, results: results, write: writeRes, syncWarn: syncWarn})
 	}
 
 	sendMatchEvent(ctx, ch, matchEvent{kind: matchEventAllDone})

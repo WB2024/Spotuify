@@ -152,3 +152,49 @@ var matchListKeys = matchListKeyMap{
 	Back:      key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back")),
 	Help:      globalKeys.Help,
 }
+
+// --- Match: results table (Done screen) — "enter" opens the file picker to
+// correct the selected row's match instead of leaving the screen, so it
+// can't share exportDoneKeyMap's "enter also means back" binding. ---
+
+type matchDoneKeyMap struct {
+	Up, Down, Edit, Back, Help key.Binding
+}
+
+func (k matchDoneKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Edit, k.Back, k.Help}
+}
+
+func (k matchDoneKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{{k.Up, k.Down}, {k.Edit}, {k.Back, k.Help}}
+}
+
+var matchDoneKeys = matchDoneKeyMap{
+	Up:   key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down: key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Edit: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "fix match")),
+	Back: key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back to menu")),
+	Help: globalKeys.Help,
+}
+
+// --- Match: file-picker overlay (correcting one track's match) ---
+
+type matchEditKeyMap struct {
+	Up, Down, Select, Cancel, Help key.Binding
+}
+
+func (k matchEditKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Select, k.Cancel, k.Help}
+}
+
+func (k matchEditKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{{k.Up, k.Down}, {k.Select}, {k.Cancel, k.Help}}
+}
+
+var matchEditKeys = matchEditKeyMap{
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Select: key.NewBinding(key.WithKeys("enter", "l", "right"), key.WithHelp("enter", "open/pick")),
+	Cancel: key.NewBinding(key.WithKeys("esc", "h", "left", "backspace"), key.WithHelp("esc", "back/cancel")),
+	Help:   globalKeys.Help,
+}

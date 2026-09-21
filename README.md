@@ -70,30 +70,42 @@ Early. More features can be layered onto this foundation over time.
 
 Every screen shares the same chrome: a gradient logo, bordered panels, and
 a context-aware help bar at the bottom (press `?` to expand it into the
-full key reference). `ctrl+c` quits from anywhere.
+full key reference). `ctrl+c` quits from anywhere. Every scrollable list or
+table also responds to the mouse wheel, in addition to the keyboard.
 
 **Main menu:** `↑`/`↓` navigate, `enter` select, `q` quit.
 
 **Export Playlists:**
-- Arrow keys / `j`/`k` — move through your playlists; the right-hand panel
-  shows full details (owner, visibility, track count, description) for
-  whichever playlist is highlighted
+- Arrow keys / `j`/`k` / mouse wheel — move through your playlists; the
+  right-hand panel shows full details (owner, visibility, track count,
+  description) for whichever playlist is highlighted
 - `space` — check a playlist for batch export
 - `a` — select/deselect all
 - `enter` — export the checked playlists (or just the highlighted one, if
   none are checked) — shows a live status table (one row per playlist,
   updating as each is fetched and written) alongside an overall progress bar
-- `/` — filter playlists by name
+- `/` — type to filter playlists by name
 - `esc` — back to the main menu (cancels an in-progress export)
 
 **Match to Local Library:**
-- Same navigation as Export Playlists (arrow keys, `space`, `a`, `/`, `esc`)
+- Same navigation as Export Playlists (arrow keys, mouse wheel, `space`,
+  `a`, `/`, `esc`)
 - `enter` — match the checked (or highlighted) playlists against your
   local library and write `.m3u8` files. The first time this runs, it
   loads and indexes your Navidrome library (see below) — after that it's
   cached and reused for the rest of the session.
 - Shows a live table, one row per track, as each playlist is matched:
   method (`isrc`/`fuzzy`/`missing`) and which local file it matched to.
+- Once a batch finishes, the results table scrolls through every track (not
+  just the first screenful) and a side panel shows full detail — artist,
+  album, playlist, method, and the complete local path — for whichever row
+  is selected.
+- `enter` on any row — matched, fuzzy, manual, or missing — opens a file
+  picker scoped to your Navidrome music folder so you can browse to and pick
+  the correct file yourself. Selecting one immediately rewrites that
+  playlist's `.m3u8` (and drops `missing.txt` if nothing's missing anymore);
+  no need to re-run the match. `esc` backs up a folder, or cancels the edit
+  entirely once you're back at the music folder's root.
 
 **Settings:**
 - `↑`/`↓` — move between fields
@@ -239,7 +251,11 @@ Matching is tiered, from most to least certain:
    with no ISRC/MusicBrainz data" in Settings to require ISRC certainty
    only.
 
-Anything that clears neither tier is reported as missing, not guessed at.
+Anything that clears neither tier is reported as missing, not guessed at —
+though every result, matched or missing, can be corrected by hand from the
+results screen afterward (see "Match to Local Library" above); a manually
+picked file is recorded as its own `manual` method, distinct from the three
+automatic tiers, and always wins over whatever (if anything) they found.
 
 ### Output
 
@@ -392,7 +408,10 @@ internal/coverart/      shared cover-art downloader (used by export and m3u8)
 internal/tui/          Bubble Tea UI — one screen per file (mainmenu.go,
                         settings.go, export_screen.go, match_screen.go),
                         sharing chrome.go (gradient logo, panel/help-bar
-                        layout), styles.go (adaptive color palette), and
+                        layout), styles.go (adaptive color palette),
+                        mouse.go (translates mouse-wheel events into
+                        list/table cursor movement — bubbles' own list and
+                        table widgets don't handle the mouse at all), and
                         keys.go (all keybindings, as bubbles/key.Binding
                         sets — add a keymap here for any new screen and the
                         help bar picks it up automatically)
