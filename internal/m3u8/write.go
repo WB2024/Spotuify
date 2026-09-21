@@ -32,22 +32,28 @@ type Result struct {
 	Missing      int
 }
 
-// Write renders match results for one playlist into
-// <dir>/<playlist-slug>-<id>/: an .m3u8 with every matched track (in
-// playlist order, paths relative to that folder), a "missing.txt" if
-// anything is unmatched, and the playlist's cover art. downloadCover
-// controls whether the cover art step runs at all.
+// Write renders match results for one playlist into <dir>/<playlist name>/:
+// a "<playlist name>.m3u8" with every matched track (in playlist order,
+// paths relative to that folder), a "missing.txt" if anything is
+// unmatched, and the playlist's cover art — matching Navidrome's own
+// convention for a file-backed playlist folder, so it scans in cleanly
+// (Navidrome auto-discovers .m3u8 files anywhere in its music folder and
+// registers/updates them as playlists on its own scan cycle; the display
+// name it uses comes from the #PLAYLIST directive written into the file
+// below, not the folder or file name). downloadCover controls whether the
+// cover art step runs at all.
 func Write(ctx context.Context, httpClient *http.Client, dir string, playlist *spotifyapi.FullPlaylist, results []match.Result, downloadCover bool) (*Result, error) {
-	outDir := filepath.Join(dir, fmt.Sprintf("%s-%s", slugify(playlist.Name), playlist.ID))
+	name := sanitizeFilename(playlist.Name)
+	outDir := filepath.Join(dir, name)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating playlist directory: %w", err)
 	}
 
 	res := &Result{Dir: outDir}
 
-	m3u8Path := filepath.Join(outDir, "playlist.m3u8")
+	m3u8Path := filepath.Join(outDir, name+".m3u8")
 	if err := writeM3U8(m3u8Path, outDir, playlist.Name, results, res); err != nil {
-		return nil, fmt.Errorf("writing playlist.m3u8: %w", err)
+		return nil, fmt.Errorf("writing %s.m3u8: %w", name, err)
 	}
 	res.M3U8Path = m3u8Path
 
@@ -127,17 +133,25 @@ func writeMissing(path, playlistName string, results []match.Result) error {
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
-var unsafeFilename = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+// unsafeFilenameChars covers what's actually illegal (or awkward) in a
+// file/directory name — just "/" on Linux, plus the extra characters
+// Windows reserves, in case this output ever gets synced to one.
+var unsafeFilenameChars = regexp.MustCompile(`[/\\:*?"<>|]+`)
 
-func slugify(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = unsafeFilename.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
+// sanitizeFilename makes name safe to use as a file/directory name while
+// keeping it human-readable — unlike slugify (used for the JSON/CSV
+// export), this deliberately preserves case, spacing, and punctuation, so
+// a playlist named "Magnum Opus" produces a folder/file named "Magnum
+// Opus", matching the convention these playlists are already stored in.
+func sanitizeFilename(name string) string {
+	s := strings.TrimSpace(name)
+	s = unsafeFilenameChars.ReplaceAllString(s, "-")
+	s = strings.Trim(s, " .")
 	if s == "" {
-		s = "playlist"
+		s = "Playlist"
 	}
-	if len(s) > 60 {
-		s = s[:60]
+	if len(s) > 150 {
+		s = strings.TrimSpace(s[:150])
 	}
 	return s
 }

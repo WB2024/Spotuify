@@ -236,16 +236,37 @@ Anything that clears neither tier is reported as missing, not guessed at.
 
 ### Output
 
-For each playlist, under `<M3U8 output directory>/<playlist-name>-<id>/`:
+For each playlist, under `<M3U8 output directory>/<playlist name>/`:
 
-- **`playlist.m3u8`** — every matched track, in playlist order, with
-  `#EXTINF` duration/artist/title and a path *relative to the `.m3u8` file
-  itself* — the convention VLC, foobar2000, Kodi, and Plex all expect for
-  a playlist that stays valid if the whole folder is moved.
+- **`<playlist name>.m3u8`** — every matched track, in playlist order,
+  with `#EXTINF` duration/artist/title and a path *relative to the `.m3u8`
+  file itself* — the convention VLC, foobar2000, Kodi, and Plex all expect
+  for a playlist that stays valid if the whole folder is moved. Also
+  includes a `#PLAYLIST:<name>` directive — that's what Navidrome uses as
+  the playlist's display name when it scans the file in (see below), not
+  the filename.
 - **`missing.txt`** — a human-readable list of anything that couldn't be
   matched (artist, title, album, Spotify link), only written if there's
   anything to report.
 - **`cover.jpg`** — the playlist's cover art, same as the JSON/CSV export.
+
+### Navidrome picks these up automatically
+
+If the M3U8 output directory is inside Navidrome's own music folder (as it
+is by default here — the Playlists folder sits under the same root
+Navidrome watches), **you don't need to do anything else**: Navidrome
+scans for `.m3u8` files as part of its normal library scan
+(`ND_SCANNER_SCHEDULE` in its own config) and creates/updates a matching
+entry in its own `playlist` table itself, resolving every relative path
+back to the actual file it already indexed. Spotuify never writes to
+Navidrome's database directly — verified this by checking `playlist` and
+`playlist_tracks` after a real run: Navidrome had already picked up the
+file, named the playlist from the `#PLAYLIST:` line, and joined every
+track to the right `media_file` row on its own. If you rename or delete a
+playlist's folder, Navidrome's own scanner reconciles that too (it purges
+playlists whose backing file has disappeared, if `ND_SCANNER_PURGEMISSING`
+is enabled) — on its own schedule, or immediately if you trigger a scan
+manually from Navidrome's UI.
 
 ## Rate limits
 
