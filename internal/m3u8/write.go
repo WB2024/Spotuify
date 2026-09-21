@@ -41,20 +41,21 @@ type Result struct {
 // (Navidrome auto-discovers .m3u8 files anywhere in its music folder and
 // registers/updates them as playlists on its own scan cycle; the display
 // name it uses comes from the #PLAYLIST directive written into the file
-// below, not the folder or file name). downloadCover controls whether the
+// below, not the folder or file name). group is that directive's prefix —
+// see Rewrite's caller for where it comes from (a configurable global
+// default, or a per-playlist override). downloadCover controls whether the
 // cover art step runs at all.
-func Write(ctx context.Context, httpClient *http.Client, dir string, playlist *spotifyapi.FullPlaylist, results []match.Result, downloadCover bool) (*Result, error) {
-	name := sanitizeFilename(playlist.Name)
-	outDir := filepath.Join(dir, name)
+func Write(ctx context.Context, httpClient *http.Client, dir string, playlist *spotifyapi.FullPlaylist, results []match.Result, downloadCover bool, group string) (*Result, error) {
+	outDir := PlaylistDir(dir, playlist.Name)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating playlist directory: %w", err)
 	}
 
 	res := &Result{Dir: outDir}
 
-	m3u8Path := filepath.Join(outDir, name+".m3u8")
-	if err := writeM3U8(m3u8Path, outDir, playlist.Name, results, res); err != nil {
-		return nil, fmt.Errorf("writing %s.m3u8: %w", name, err)
+	m3u8Path := M3U8Path(dir, playlist.Name)
+	if err := writeM3U8(m3u8Path, outDir, playlist.Name, group, results, res); err != nil {
+		return nil, fmt.Errorf("writing %s: %w", filepath.Base(m3u8Path), err)
 	}
 	res.M3U8Path = m3u8Path
 
@@ -84,15 +85,14 @@ func Write(ctx context.Context, httpClient *http.Client, dir string, playlist *s
 // already exists, so this only touches the two text files, reusing the
 // exact same layout Write produced so Navidrome's rescan sees a normal
 // update rather than a different playlist.
-func Rewrite(dir string, playlist *spotifyapi.FullPlaylist, results []match.Result) (*Result, error) {
-	name := sanitizeFilename(playlist.Name)
-	outDir := filepath.Join(dir, name)
+func Rewrite(dir string, playlist *spotifyapi.FullPlaylist, results []match.Result, group string) (*Result, error) {
+	outDir := PlaylistDir(dir, playlist.Name)
 
 	res := &Result{Dir: outDir}
 
-	m3u8Path := filepath.Join(outDir, name+".m3u8")
-	if err := writeM3U8(m3u8Path, outDir, playlist.Name, results, res); err != nil {
-		return nil, fmt.Errorf("writing %s.m3u8: %w", name, err)
+	m3u8Path := M3U8Path(dir, playlist.Name)
+	if err := writeM3U8(m3u8Path, outDir, playlist.Name, group, results, res); err != nil {
+		return nil, fmt.Errorf("writing %s: %w", filepath.Base(m3u8Path), err)
 	}
 	res.M3U8Path = m3u8Path
 
@@ -114,17 +114,25 @@ func Rewrite(dir string, playlist *spotifyapi.FullPlaylist, results []match.Resu
 	return res, nil
 }
 
-// navidromeGroup is the folder Navidrome/Feishin group Spotuify-generated
-// playlists under in their playlist sidebar — Navidrome treats "/" in a
-// #PLAYLIST directive as a UI folder hierarchy, not a filesystem path.
-// Matches this user's existing "Spotify/SR/<name>" convention so old and
-// new playlists sit in the same place.
-const navidromeGroup = "Spotify/SR/"
+// PlaylistDir returns the output folder Write/Rewrite use (or would use)
+// for a playlist under dir.
+func PlaylistDir(dir, playlistName string) string {
+	return filepath.Join(dir, sanitizeFilename(playlistName))
+}
 
-func writeM3U8(path, outDir, playlistName string, results []match.Result, res *Result) error {
+// M3U8Path returns the .m3u8 path Write/Rewrite use (or would use) for a
+// playlist under dir — exported so callers (like the TUI's playlist list,
+// checking which playlists already have a written file) can rely on the
+// same naming convention without duplicating it.
+func M3U8Path(dir, playlistName string) string {
+	name := sanitizeFilename(playlistName)
+	return filepath.Join(PlaylistDir(dir, playlistName), name+".m3u8")
+}
+
+func writeM3U8(path, outDir, playlistName, group string, results []match.Result, res *Result) error {
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
-	b.WriteString("#PLAYLIST:" + navidromeGroup + playlistName + "\n")
+	b.WriteString("#PLAYLIST:" + group + playlistName + "\n")
 
 	for _, r := range results {
 		if r.Item.Track == nil {

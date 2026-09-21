@@ -40,7 +40,7 @@ type matchEvent struct {
 // them against idx, writes the .m3u8 (+ missing report + cover art), and
 // reports progress over ch. It's run in its own goroutine; ch is closed
 // when done.
-func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.Client, idx *library.Index, cfg *config.Config, queue []spotifyapi.SimplifiedPlaylist, ch chan<- matchEvent) {
+func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.Client, idx *library.Index, cfg *config.Config, groups *config.PlaylistGroups, queue []spotifyapi.SimplifiedPlaylist, ch chan<- matchEvent) {
 	defer close(ch)
 
 	opts := match.Options{EnableFuzzy: cfg.EnableFuzzyMatching, FuzzyThreshold: match.DefaultOptions().FuzzyThreshold}
@@ -82,7 +82,7 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 		})
 
 		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: writing .m3u8...", sp.Name)})
-		writeRes, err := m3u8.Write(ctx, httpClient, cfg.M3U8Dir, full, results, cfg.DownloadCovers)
+		writeRes, err := m3u8.Write(ctx, httpClient, cfg.M3U8Dir, full, results, cfg.DownloadCovers, resolveGroup(cfg, groups, sp.ID))
 		if err != nil {
 			sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, results: results, err: err})
 			continue
@@ -102,6 +102,16 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 	}
 
 	sendMatchEvent(ctx, ch, matchEvent{kind: matchEventAllDone})
+}
+
+// resolveGroup returns the Navidrome group (the #PLAYLIST directive prefix)
+// to use for playlistID: its per-playlist override if one is set, else the
+// configured global default.
+func resolveGroup(cfg *config.Config, groups *config.PlaylistGroups, playlistID string) string {
+	if g, ok := groups.Get(playlistID); ok {
+		return g
+	}
+	return cfg.NavidromeGroup
 }
 
 func waitForMatchEvent(ch <-chan matchEvent) tea.Cmd {

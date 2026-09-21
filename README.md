@@ -90,12 +90,25 @@ table also responds to the mouse wheel, in addition to the keyboard.
 **Match to Local Library:**
 - Same navigation as Export Playlists (arrow keys, mouse wheel, `space`,
   `a`, `/`, `esc`)
+- The playlist list marks each one already carrying a written `.m3u8` with a
+  `✓ synced` tag, and a chip row above the list (`All` / `Has file` /
+  `Missing`, each with a live count) shows which one is active — `m` cycles
+  through them, so "everything still missing a file" or "everything I've
+  already generated" is one keypress away instead of scanning the whole
+  list by eye. Checking a playlist (`space`) persists across filter changes,
+  so you can filter to "Missing", select-all (`a`), clear the filter, and
+  still match exactly what you selected.
+- `g` — edit the highlighted playlist's Navidrome group (see "Where
+  playlists show up in Navidrome/Feishin" below) without leaving the list;
+  `enter` saves, an empty value clears the override back to the global
+  default, `esc` cancels
 - `enter` — match the checked (or highlighted) playlists against your
   local library and write `.m3u8` files. The first time this runs, it
   loads and indexes your Navidrome library (see below) — after that it's
   cached and reused for the rest of the session.
-- Shows a live table, one row per track, as each playlist is matched:
-  method (`isrc`/`fuzzy`/`missing`) and which local file it matched to.
+- Shows a live table, one row per track, as each playlist is matched, each
+  row background-tinted by method (`isrc`/`fuzzy`/`manual`/`missing`) for a
+  quick visual scan of how clean a playlist came out.
 - Once a batch finishes, the results table scrolls through every track (not
   just the first screenful) and a side panel shows full detail — artist,
   album, playlist, method, and the complete local path — for whichever row
@@ -119,11 +132,11 @@ table also responds to the mouse wheel, in addition to the keyboard.
 Settings lets you set/change your Spotify Client ID and Secret, the export
 directory, the OAuth redirect port, whether cover art is downloaded, your
 Navidrome database path and music folder, the playlist output directory,
-the two matching toggles (MusicBrainz resolution, fuzzy matching), and
-optionally a Navidrome server URL/username/password for cover-art upload —
-all written back to `.env` on Save. Changing credentials or hitting "Log out"
-clears the cached session, so the next export/match re-triggers browser
-login.
+the default Navidrome group (see below), the two matching toggles
+(MusicBrainz resolution, fuzzy matching), and optionally a Navidrome server
+URL/username/password for cover-art upload — all written back to `.env` on
+Save. Changing credentials or hitting "Log out" clears the cached session,
+so the next export/match re-triggers browser login.
 
 ## What gets exported
 
@@ -265,17 +278,39 @@ For each playlist, under `<M3U8 output directory>/<playlist name>/`:
   with `#EXTINF` duration/artist/title and a path *relative to the `.m3u8`
   file itself* — the convention VLC, foobar2000, Kodi, and Plex all expect
   for a playlist that stays valid if the whole folder is moved. Also
-  includes a `#PLAYLIST:Spotify/SR/<name>` directive — that's what
-  Navidrome/Feishin use as the playlist's *display* name (not the
-  filename) when it scans the file in, and the `/`s in it become a folder
-  hierarchy in their sidebar — verified directly against a live Feishin
-  client, which shows these grouped under Playlists › Spotify › SR.
+  includes a `#PLAYLIST:<group><name>` directive (`group` defaults to
+  `Spotify/SR/` — see below) — that's what Navidrome/Feishin use as the
+  playlist's *display* name (not the filename) when it scans the file in,
+  and the `/`s in it become a folder hierarchy in their sidebar — verified
+  directly against a live Feishin client, which shows these grouped under
+  Playlists › Spotify › SR.
 - **`missing.txt`** — a human-readable list of anything that couldn't be
   matched (artist, title, album, Spotify link), only written if there's
   anything to report.
 - **`cover.jpg`** — the playlist's cover art, same as the JSON/CSV export.
   This is a local file for browsing outside Navidrome; see below for
   getting it to show up *inside* Navidrome/Feishin's own UI.
+
+### Where playlists show up in Navidrome/Feishin
+
+The `group` prefix ahead of the playlist name in that `#PLAYLIST` directive
+— what actually controls the folder a playlist sits under in Navidrome and
+Feishin's sidebar — is configurable two ways, in order of precedence:
+
+1. **Per playlist.** From the Match screen's playlist list, press `g` on a
+   playlist to set (or clear) its own group, stored by Spotify playlist ID
+   in `~/.cache/spotuify/playlist_groups.json`. Clearing it (save an empty
+   value) reverts that playlist to the global default.
+2. **Globally.** The "Navidrome group" field in Settings
+   (`SPOTUIFY_NAVIDROME_GROUP` in `.env`), defaulting to `Spotify/SR/` to
+   match this library's existing convention.
+
+Either way, a trailing `/` is what nests it as a folder rather than dumping
+the name directly at the top level — `Spotify/SR/` groups under Playlists ›
+Spotify › SR, while a bare `Imports/` groups directly under Playlists ›
+Imports. Changing a playlist's group only takes effect the next time it's
+matched (it's baked into the `.m3u8` at write time, same as everything
+else in it) — re-run the match to move an already-written playlist.
 
 ### Getting cover art and description to show up inside Navidrome/Feishin
 
@@ -325,9 +360,9 @@ The one real edge case: since the path is derived from the *name* alone,
 two genuinely different Spotify playlists that happen to share an
 identical name would both resolve to the same file — the second one
 matched would silently overwrite the first's `.m3u8`/cover, not create a
-second Navidrome playlist. This mirrors the existing "Spotify/SR/..."
-convention (no ID in the path), so it's consistent with how this library
-is already organized, but worth knowing about if you ever have two
+second Navidrome playlist. This mirrors the default `Spotify/SR/...`
+grouping convention (no ID in the path), so it's consistent with how this
+library is already organized, but worth knowing about if you ever have two
 same-named playlists on Spotify.
 
 What *does* create a genuine duplicate: changing how Spotuify names its
@@ -390,7 +425,9 @@ place to check against Spotify's current docs.
 
 ```
 cmd/spotuify/         entry point
-internal/config/      .env loading + persistence (Settings screen writes here)
+internal/config/      .env loading + persistence (Settings screen writes here),
+                        plus per-playlist Navidrome-group overrides
+                        (playlist_groups.go)
 internal/auth/        Spotify OAuth (Authorization Code flow, token cache)
 internal/spotifyapi/  Spotify Web API client + models, rate-limit handling
 internal/export/      JSON/CSV writers for the Export screen

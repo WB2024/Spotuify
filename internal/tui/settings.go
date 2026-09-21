@@ -24,6 +24,7 @@ const (
 	rowNavidromeDB
 	rowNavidromeMusicPath
 	rowM3U8Dir
+	rowNavidromeGroup
 	rowNavidromeAPIURL
 	rowNavidromeAPIUsername
 	rowNavidromeAPIPassword
@@ -96,6 +97,7 @@ func newSettings(cfg *config.Config) SettingsModel {
 	inputs[rowNavidromeDB] = mk("/path/to/navidrome/data/navidrome.db", cfg.NavidromeDBPath, false)
 	inputs[rowNavidromeMusicPath] = mk("/path/to/your/music", cfg.NavidromeMusicPath, false)
 	inputs[rowM3U8Dir] = mk("playlists", cfg.M3U8Dir, false)
+	inputs[rowNavidromeGroup] = mk("Spotify/SR/", cfg.NavidromeGroup, false)
 	inputs[rowNavidromeAPIURL] = mk("http://navidrome.example.com", cfg.NavidromeAPIURL, false)
 	inputs[rowNavidromeAPIUsername] = mk("Navidrome username", cfg.NavidromeUsername, false)
 	inputs[rowNavidromeAPIPassword] = mk("(not set — cover art upload skipped)", cfg.NavidromePassword, true)
@@ -263,6 +265,7 @@ func (s *SettingsModel) doSave() bool {
 	s.cfg.NavidromeDBPath = strings.TrimSpace(s.inputs[rowNavidromeDB].Value())
 	s.cfg.NavidromeMusicPath = strings.TrimSpace(s.inputs[rowNavidromeMusicPath].Value())
 	s.cfg.M3U8Dir = m3u8Dir
+	s.cfg.NavidromeGroup = strings.TrimSpace(s.inputs[rowNavidromeGroup].Value())
 	s.cfg.ResolveMusicBrainzISRC = s.resolveMBID
 	s.cfg.EnableFuzzyMatching = s.fuzzyMatch
 	s.cfg.NavidromeAPIURL = strings.TrimRight(strings.TrimSpace(s.inputs[rowNavidromeAPIURL].Value()), "/")
@@ -351,6 +354,7 @@ func (s SettingsModel) View() string {
 		textRow(body, rowNavidromeDB, "Navidrome database path", "The navidrome.db file on this machine")
 		textRow(body, rowNavidromeMusicPath, "Navidrome music path", "This machine's path to Navidrome's music root (its ND_MUSICFOLDER)")
 		textRow(body, rowM3U8Dir, "Playlist output directory", "Where .m3u8 files, missing-track reports, and cover art are written")
+		textRow(body, rowNavidromeGroup, "Navidrome group", "Prefix before the playlist name in the #PLAYLIST directive — \"/\" nests as folders in Navidrome/Feishin's sidebar. Overridable per playlist from the Match screen's playlist list (press g).")
 		toggleRow(body, rowResolveMBID, "Bridge via MusicBrainz for tracks with no ISRC tag (rate-limited, cached)", s.resolveMBID)
 		toggleRow(body, rowFuzzyMatch, "Fuzzy-match tracks with no ISRC/MusicBrainz data", s.fuzzyMatch)
 	})

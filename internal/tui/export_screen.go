@@ -40,10 +40,17 @@ const (
 )
 
 // playlistItem adapts a Spotify playlist to bubbles/list's Item interface,
-// tracking whether the user has checked it for a batch export.
+// tracking whether the user has checked it for a batch export/match.
 type playlistItem struct {
 	playlist spotifyapi.SimplifiedPlaylist
 	selected bool
+
+	// hasFile and group are Match-screen-only: whether this playlist
+	// already has a written .m3u8, and its resolved Navidrome group
+	// (override if set, else the global default). Export never sets
+	// these, so they're always zero-valued there and never shown.
+	hasFile bool
+	group   string
 }
 
 func (i playlistItem) Title() string {
@@ -51,7 +58,11 @@ func (i playlistItem) Title() string {
 	if i.selected {
 		box = "◉"
 	}
-	return fmt.Sprintf("%s %s", box, i.playlist.Name)
+	title := fmt.Sprintf("%s %s", box, i.playlist.Name)
+	if i.hasFile {
+		title += "  " + successStyle.Render("✓ synced")
+	}
+	return title
 }
 
 func (i playlistItem) Description() string {
@@ -344,7 +355,7 @@ func (e ExportModel) handleKey(msg tea.KeyMsg) (ExportModel, tea.Cmd, exportActi
 		case key.Matches(msg, playlistListKeys.Back):
 			return e, nil, exportActionBack
 		case key.Matches(msg, playlistListKeys.Toggle):
-			idx := e.list.Index()
+			idx := e.list.GlobalIndex() // SetItem indexes into the unfiltered list; Index() doesn't when a text filter is active
 			if it, ok := e.list.SelectedItem().(playlistItem); ok {
 				it.selected = !it.selected
 				e.list.SetItem(idx, it)

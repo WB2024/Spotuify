@@ -49,6 +49,19 @@ type Config struct {
 	// playlist.
 	M3U8Dir string
 
+	// NavidromeGroup is the default prefix written into every playlist's
+	// #PLAYLIST directive ahead of its name (e.g. "Spotify/SR/" produces
+	// "Spotify/SR/<playlist name>") — Navidrome/Feishin treat "/" in that
+	// directive as a UI folder hierarchy for grouping playlists in their
+	// sidebar, not a filesystem path. Overridable per playlist; see
+	// PlaylistGroupsPath.
+	NavidromeGroup string
+
+	// PlaylistGroupsPath is where per-playlist NavidromeGroup overrides
+	// (set from the Match screen's playlist list) are persisted, keyed by
+	// Spotify playlist ID. See PlaylistGroups.
+	PlaylistGroupsPath string
+
 	// NavidromeAPIURL, NavidromeUsername, and NavidromePassword authenticate
 	// against Navidrome's own REST API (distinct from the read-only database
 	// access above) — used only to upload a playlist's cover art, since
@@ -101,6 +114,7 @@ const (
 	envNavidromeDB      = "SPOTUIFY_NAVIDROME_DB"
 	envNavidromeMusic   = "SPOTUIFY_NAVIDROME_MUSIC_PATH"
 	envM3U8Dir          = "SPOTUIFY_M3U8_DIR"
+	envNavidromeGroup   = "SPOTUIFY_NAVIDROME_GROUP"
 	envResolveMBISRC    = "SPOTUIFY_RESOLVE_MUSICBRAINZ_ISRC"
 	envEnableFuzzy      = "SPOTUIFY_FUZZY_MATCH"
 	envNavidromeAPIURL  = "SPOTUIFY_NAVIDROME_API_URL"
@@ -109,6 +123,11 @@ const (
 )
 
 const defaultRedirectPort = 8080
+
+// defaultNavidromeGroup matches the "Spotify/SR/<playlist name>" convention
+// this app's playlists have always used — the default for NavidromeGroup
+// when SPOTUIFY_NAVIDROME_GROUP isn't set.
+const defaultNavidromeGroup = "Spotify/SR/"
 
 // Load reads .env (if present) and environment variables into a Config.
 // A missing .env file, or missing credentials, is not an error — the
@@ -142,12 +161,18 @@ func Load() (*Config, error) {
 		m3u8Dir = "playlists"
 	}
 
+	navidromeGroup := os.Getenv(envNavidromeGroup)
+	if navidromeGroup == "" {
+		navidromeGroup = defaultNavidromeGroup
+	}
+
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		cacheDir = "."
 	}
 	tokenPath := filepath.Join(cacheDir, "spotuify", "token.json")
 	libraryCachePath := filepath.Join(cacheDir, "spotuify", "mb_isrc_cache.json")
+	playlistGroupsPath := filepath.Join(cacheDir, "spotuify", "playlist_groups.json")
 
 	return &Config{
 		ClientID:               os.Getenv(envClientID),
@@ -158,6 +183,8 @@ func Load() (*Config, error) {
 		NavidromeDBPath:        os.Getenv(envNavidromeDB),
 		NavidromeMusicPath:     os.Getenv(envNavidromeMusic),
 		M3U8Dir:                m3u8Dir,
+		NavidromeGroup:         navidromeGroup,
+		PlaylistGroupsPath:     playlistGroupsPath,
 		ResolveMusicBrainzISRC: resolveMBISRC,
 		EnableFuzzyMatching:    enableFuzzy,
 		NavidromeAPIURL:        os.Getenv(envNavidromeAPIURL),
@@ -240,6 +267,7 @@ func (c *Config) Save() error {
 		{envNavidromeDB, c.NavidromeDBPath},
 		{envNavidromeMusic, c.NavidromeMusicPath},
 		{envM3U8Dir, c.M3U8Dir},
+		{envNavidromeGroup, c.NavidromeGroup},
 		{envResolveMBISRC, strconv.FormatBool(c.ResolveMusicBrainzISRC)},
 		{envEnableFuzzy, strconv.FormatBool(c.EnableFuzzyMatching)},
 		{envNavidromeAPIURL, c.NavidromeAPIURL},

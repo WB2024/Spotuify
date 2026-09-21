@@ -89,7 +89,7 @@ func (m Model) capturingText() bool {
 	if m.screen == screenExport && m.export.IsFiltering() {
 		return true
 	}
-	if m.screen == screenMatch && m.match.IsFiltering() {
+	if m.screen == screenMatch && (m.match.IsFiltering() || m.match.IsEditingGroup()) {
 		return true
 	}
 	return false

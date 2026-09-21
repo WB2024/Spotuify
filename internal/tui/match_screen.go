@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,8 +15,10 @@ import (
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"spotuify/internal/config"
 	"spotuify/internal/library"
@@ -44,6 +47,33 @@ const (
 	matchActionNone matchAction = iota
 	matchActionBack
 )
+
+// matchStatusFilter narrows the playlist list to those that do/don't
+// already have a written .m3u8 — cycled with "m" — so a library-wide catch
+// up ("everything still missing a file") or a spot-check ("everything
+// already synced") is a keypress away instead of eyeballing the whole list.
+type matchStatusFilter int
+
+const (
+	matchFilterAll matchStatusFilter = iota
+	matchFilterMissing
+	matchFilterHasFile
+)
+
+func (f matchStatusFilter) next() matchStatusFilter {
+	return (f + 1) % 3
+}
+
+func (f matchStatusFilter) label() string {
+	switch f {
+	case matchFilterMissing:
+		return "Missing a file"
+	case matchFilterHasFile:
+		return "Has a file"
+	default:
+		return "All"
+	}
+}
 
 // audioExtensions gates which files the manual-match file picker lets the
 // user select — broad enough to cover this library without needing a
@@ -93,6 +123,11 @@ type MatchModel struct {
 	// subsequent match runs in the same session.
 	library *library.Index
 
+	// playlistGroups holds per-playlist Navidrome-group overrides (see
+	// config.PlaylistGroups), loaded once at startup and edited from the
+	// playlist list.
+	playlistGroups *config.PlaylistGroups
+
 	state matchScreenState
 
 	spin spinner.Model
@@ -104,6 +139,18 @@ type MatchModel struct {
 
 	user *spotifyapi.User
 	err  error
+
+	// allPlaylists is every loaded playlist, independent of what
+	// statusFilter currently narrows m.list down to — selections (space/a)
+	// and hasFile/group are tracked here so they survive switching filters,
+	// and startMatching's queue is built from this, not the filtered view.
+	allPlaylists []playlistItem
+	statusFilter matchStatusFilter
+
+	// Inline "edit this playlist's Navidrome group" text field, active
+	// only in matchStateList.
+	editingGroup bool
+	groupInput   textinput.Model
 
 	libEvents chan libraryLoadEvent
 	libPhase  string
@@ -146,7 +193,16 @@ func newMatchModel(cfg *config.Config) MatchModel {
 	tbl := table.New(table.WithFocused(true))
 	tbl.SetStyles(tableStyles())
 
-	return MatchModel{cfg: cfg, spin: sp, list: l, prog: pg, tbl: tbl}
+	groups, _ := config.LoadPlaylistGroups(cfg.PlaylistGroupsPath) // usable even on error, see LoadPlaylistGroups
+
+	gi := textinput.New()
+	gi.Placeholder = cfg.NavidromeGroup
+	gi.CharLimit = 200
+	gi.Width = 40
+	gi.PromptStyle = accentStyle
+	gi.Cursor.Style = accentStyle
+
+	return MatchModel{cfg: cfg, spin: sp, list: l, prog: pg, tbl: tbl, playlistGroups: groups, groupInput: gi}
 }
 
 // newLibraryFilePicker builds a fresh, library-scoped file picker rooted at
@@ -182,6 +238,89 @@ func matchMethodLabel(method match.Method) string {
 	}
 }
 
+func methodRowColor(method match.Method) lipgloss.AdaptiveColor {
+	switch method {
+	case match.MethodISRC:
+		return rowBgISRC
+	case match.MethodFuzzy:
+		return rowBgFuzzy
+	case match.MethodManual:
+		return rowBgManual
+	default:
+		return rowBgMissing
+	}
+}
+
+// renderMatchTable draws tbl's visible rows itself instead of calling
+// tbl.View(): bubbles/table (v1.0.0) has no per-row styling hook, and
+// there's no safe way to bolt one on from outside the package — its cell
+// rendering truncates by counting raw bytes with no awareness of ANSI
+// escapes, so pre-coloring a cell's text and letting table's own Truncate
+// run over it corrupts the escape sequences instead of the visible text.
+// This mirrors table's own cell-composition pipeline (same
+// Width/MaxWidth/Inline/Truncate treatment per cell, and the identical
+// start/end windowing formula table uses internally, from tbl.Cursor() and
+// tbl.Height()) closely enough to be a drop-in replacement for tbl.View(),
+// just with a method-colored background baked into each row's own cells
+// rather than wrapped around the row after the fact (which would suffer
+// the same embedded-reset problem: each cell's own style already ends in
+// its own ANSI reset, so a background applied only around the outside
+// would just get wiped by the first one).
+func renderMatchTable(tbl table.Model, methodAt func(row int) match.Method) string {
+	cols := tbl.Columns()
+	rows := tbl.Rows()
+	cursor := tbl.Cursor()
+	height := tbl.Height()
+	sty := tableStyles()
+
+	renderCell := func(style lipgloss.Style, value string, width int) string {
+		boxed := lipgloss.NewStyle().Width(width).MaxWidth(width).Inline(true).Render(runewidth.Truncate(value, width, "…"))
+		return style.Render(boxed)
+	}
+
+	var header []string
+	for _, c := range cols {
+		if c.Width <= 0 {
+			continue
+		}
+		header = append(header, renderCell(sty.Header, c.Title, c.Width))
+	}
+
+	start := clampInt(cursor-height, 0, cursor)
+	end := clampInt(cursor+height, cursor, len(rows))
+
+	lines := []string{lipgloss.JoinHorizontal(lipgloss.Top, header...)}
+	for i := start; i < end; i++ {
+		cellStyle := sty.Cell
+		if i != cursor {
+			cellStyle = cellStyle.Background(methodRowColor(methodAt(i)))
+		}
+		var cells []string
+		for c, value := range rows[i] {
+			if cols[c].Width <= 0 {
+				continue
+			}
+			cells = append(cells, renderCell(cellStyle, value, cols[c].Width))
+		}
+		row := lipgloss.JoinHorizontal(lipgloss.Top, cells...)
+		if i == cursor {
+			row = sty.Selected.Render(row)
+		}
+		lines = append(lines, row)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 // SetSize propagates a terminal resize to every widget this screen owns.
 func (m *MatchModel) SetSize(width, height int) {
 	m.width, m.height = width, height
@@ -194,7 +333,13 @@ func (m *MatchModel) SetSize(width, height int) {
 	if listW < 30 {
 		listW = width
 	}
-	m.list.SetSize(listW, m.contentHeight)
+	// -2: the status-filter chip row viewList draws above the list, plus
+	// its blank-line separator.
+	listHeight := m.contentHeight - 2
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	m.list.SetSize(listW, listHeight)
 
 	m.prog.Width = width - 4
 	if m.prog.Width < 10 {
@@ -246,6 +391,9 @@ func (m *MatchModel) InvalidateClient() { m.client = nil }
 func (m MatchModel) Keys() help.KeyMap {
 	switch m.state {
 	case matchStateList:
+		if m.editingGroup {
+			return settingsEditKeys
+		}
 		if m.list.FilterState() == list.Filtering {
 			return m.list
 		}
@@ -270,6 +418,13 @@ func (m MatchModel) IsFiltering() bool {
 	return m.state == matchStateList && m.list.FilterState() == list.Filtering
 }
 
+// IsEditingGroup reports whether the inline Navidrome-group text field
+// currently has focus, so the root model knows to route every keystroke
+// into it instead of treating them as shortcuts.
+func (m MatchModel) IsEditingGroup() bool {
+	return m.state == matchStateList && m.editingGroup
+}
+
 func (m MatchModel) Update(msg tea.Msg) (MatchModel, tea.Cmd, matchAction) {
 	switch msg := msg.(type) {
 
@@ -291,11 +446,17 @@ func (m MatchModel) Update(msg tea.Msg) (MatchModel, tea.Cmd, matchAction) {
 
 	case playlistsLoadedMsg:
 		m.user = msg.user
-		items := make([]list.Item, len(msg.playlists))
+		items := make([]playlistItem, len(msg.playlists))
 		for i, p := range msg.playlists {
-			items[i] = playlistItem{playlist: p}
+			items[i] = playlistItem{
+				playlist: p,
+				hasFile:  m.playlistHasFile(p.Name),
+				group:    resolveGroup(m.cfg, m.playlistGroups, p.ID),
+			}
 		}
-		m.list.SetItems(items)
+		m.allPlaylists = items
+		m.statusFilter = matchFilterAll
+		m.applyStatusFilter()
 		m.state = matchStateList
 		return m, nil, matchActionNone
 
@@ -324,6 +485,11 @@ func (m MatchModel) Update(msg tea.Msg) (MatchModel, tea.Cmd, matchAction) {
 
 	switch m.state {
 	case matchStateList:
+		if m.editingGroup {
+			var cmd tea.Cmd
+			m.groupInput, cmd = m.groupInput.Update(msg)
+			return m, cmd, matchActionNone
+		}
 		if d := wheelDelta(msg); d != 0 {
 			scrollList(&m.list, d)
 			return m, nil, matchActionNone
@@ -361,6 +527,9 @@ func (m MatchModel) Update(msg tea.Msg) (MatchModel, tea.Cmd, matchAction) {
 }
 
 func (m MatchModel) handleKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction) {
+	if m.state == matchStateList && m.editingGroup {
+		return m.handleGroupEditKey(msg)
+	}
 	if m.state == matchStateList && m.list.FilterState() == list.Filtering {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
@@ -373,10 +542,11 @@ func (m MatchModel) handleKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction)
 		case key.Matches(msg, matchListKeys.Back):
 			return m, nil, matchActionBack
 		case key.Matches(msg, matchListKeys.Toggle):
-			idx := m.list.Index()
+			idx := m.list.GlobalIndex() // SetItem indexes into the unfiltered list; Index() doesn't when a text filter is active
 			if it, ok := m.list.SelectedItem().(playlistItem); ok {
 				it.selected = !it.selected
 				m.list.SetItem(idx, it)
+				m.syncAllPlaylist(it)
 			}
 			return m, nil, matchActionNone
 		case key.Matches(msg, matchListKeys.SelectAll):
@@ -392,8 +562,15 @@ func (m MatchModel) handleKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction)
 				p := it.(playlistItem)
 				p.selected = !allSelected
 				m.list.SetItem(i, p)
+				m.syncAllPlaylist(p)
 			}
 			return m, nil, matchActionNone
+		case key.Matches(msg, matchListKeys.StatusFilter):
+			m.statusFilter = m.statusFilter.next()
+			m.applyStatusFilter()
+			return m, nil, matchActionNone
+		case key.Matches(msg, matchListKeys.EditGroup):
+			return m.beginEditGroup()
 		case key.Matches(msg, matchListKeys.Match):
 			return m.startOrLoadLibrary()
 		}
@@ -499,7 +676,8 @@ func (m MatchModel) applyManualMatch(path string) (MatchModel, tea.Cmd, matchAct
 	r.LocalPath = path
 	r.Confidence = 1
 
-	if res, err := m3u8.Rewrite(m.cfg.M3U8Dir, run.playlist, run.results); err != nil {
+	group := resolveGroup(m.cfg, m.playlistGroups, run.playlist.ID)
+	if res, err := m3u8.Rewrite(m.cfg.M3U8Dir, run.playlist, run.results, group); err != nil {
 		m.editErr = "saving playlist: " + err.Error()
 	} else {
 		run.outcome.matched = res.Matched
@@ -508,6 +686,104 @@ func (m MatchModel) applyManualMatch(path string) (MatchModel, tea.Cmd, matchAct
 
 	m.tbl.SetRows(m.tableRows())
 	return m, nil, matchActionNone
+}
+
+// playlistHasFile reports whether name already has a written .m3u8 under
+// the configured output directory.
+func (m MatchModel) playlistHasFile(name string) bool {
+	if m.cfg.M3U8Dir == "" {
+		return false
+	}
+	_, err := os.Stat(m3u8.M3U8Path(m.cfg.M3U8Dir, name))
+	return err == nil
+}
+
+// syncAllPlaylist writes it back into m.allPlaylists (matched by playlist
+// ID), so a selection toggle made while a status filter narrows the
+// visible list isn't lost when the filter changes again — m.list only ever
+// holds a subset, m.allPlaylists is the durable source of truth.
+func (m *MatchModel) syncAllPlaylist(it playlistItem) {
+	for i := range m.allPlaylists {
+		if m.allPlaylists[i].playlist.ID == it.playlist.ID {
+			m.allPlaylists[i] = it
+			return
+		}
+	}
+}
+
+// applyStatusFilter rebuilds m.list's visible items from m.allPlaylists
+// according to m.statusFilter.
+func (m *MatchModel) applyStatusFilter() {
+	visible := make([]list.Item, 0, len(m.allPlaylists))
+	for _, it := range m.allPlaylists {
+		switch m.statusFilter {
+		case matchFilterMissing:
+			if it.hasFile {
+				continue
+			}
+		case matchFilterHasFile:
+			if !it.hasFile {
+				continue
+			}
+		}
+		visible = append(visible, it)
+	}
+	m.list.SetItems(visible)
+}
+
+// beginEditGroup opens the inline Navidrome-group text field for the
+// playlist currently highlighted in the list.
+func (m MatchModel) beginEditGroup() (MatchModel, tea.Cmd, matchAction) {
+	it, ok := m.list.SelectedItem().(playlistItem)
+	if !ok {
+		return m, nil, matchActionNone
+	}
+	m.editingGroup = true
+	m.groupInput.Placeholder = m.cfg.NavidromeGroup
+	if override, has := m.playlistGroups.Get(it.playlist.ID); has {
+		m.groupInput.SetValue(override)
+	} else {
+		m.groupInput.SetValue("")
+	}
+	m.groupInput.CursorEnd()
+	cmd := m.groupInput.Focus()
+	return m, cmd, matchActionNone
+}
+
+// handleGroupEditKey drives the inline Navidrome-group text field: enter
+// saves (an empty value clears the override, reverting to the global
+// default) and esc cancels without saving.
+func (m MatchModel) handleGroupEditKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction) {
+	switch {
+	case key.Matches(msg, settingsEditKeys.Confirm) && msg.String() == "esc":
+		m.groupInput.Blur()
+		m.editingGroup = false
+		return m, nil, matchActionNone
+
+	case key.Matches(msg, settingsEditKeys.Confirm):
+		idx := m.list.GlobalIndex() // SetItem indexes into the unfiltered list; Index() doesn't when a text filter is active
+		it, ok := m.list.SelectedItem().(playlistItem)
+		if !ok {
+			m.editingGroup = false
+			return m, nil, matchActionNone
+		}
+		value := strings.TrimSpace(m.groupInput.Value())
+		if err := m.playlistGroups.Set(it.playlist.ID, value); err != nil {
+			m.groupInput.Blur()
+			m.editingGroup = false
+			return m, nil, matchActionNone
+		}
+		it.group = resolveGroup(m.cfg, m.playlistGroups, it.playlist.ID)
+		m.list.SetItem(idx, it)
+		m.syncAllPlaylist(it)
+		m.groupInput.Blur()
+		m.editingGroup = false
+		return m, nil, matchActionNone
+	}
+
+	var cmd tea.Cmd
+	m.groupInput, cmd = m.groupInput.Update(msg)
+	return m, cmd, matchActionNone
 }
 
 func (m MatchModel) startOrLoadLibrary() (MatchModel, tea.Cmd, matchAction) {
@@ -545,9 +821,13 @@ func (m MatchModel) handleLibraryEvent(ev libraryLoadEvent) (MatchModel, tea.Cmd
 }
 
 func (m MatchModel) startMatching() (MatchModel, tea.Cmd, matchAction) {
+	// Selections are checked against the full set, not just m.list's
+	// current (possibly status-filtered) view — a playlist checked while
+	// filtered to "Missing" stays queued even after switching back to
+	// "All", since the checkbox represents a persistent choice, not one
+	// scoped to whatever's visible right now.
 	var queue []spotifyapi.SimplifiedPlaylist
-	for _, it := range m.list.Items() {
-		p := it.(playlistItem)
+	for _, p := range m.allPlaylists {
 		if p.selected {
 			queue = append(queue, p.playlist)
 		}
@@ -573,7 +853,7 @@ func (m MatchModel) startMatching() (MatchModel, tea.Cmd, matchAction) {
 
 	ch := make(chan matchEvent)
 	m.matchEvents = ch
-	go runMatch(m.ctx, m.client, m.httpClient, m.library, m.cfg, queue, ch)
+	go runMatch(m.ctx, m.client, m.httpClient, m.library, m.cfg, m.playlistGroups, queue, ch)
 
 	return m, tea.Batch(waitForMatchEvent(ch), m.prog.SetPercent(0)), matchActionNone
 }
@@ -619,6 +899,16 @@ func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchA
 		return m, nil, matchActionNone
 	}
 	return m, nil, matchActionNone
+}
+
+// methodAtRow returns the match method for the given results-table row
+// index, used to color that row's background in renderMatchTable.
+func (m MatchModel) methodAtRow(row int) match.Method {
+	if row < 0 || row >= len(m.trackRefs) {
+		return match.MethodNone
+	}
+	ref := m.trackRefs[row]
+	return m.runs[ref.runIdx].results[ref.resultIdx].Method
 }
 
 // resultAt returns the playlist name and match result for the given table
@@ -728,7 +1018,7 @@ func (m MatchModel) viewBatch(heading string) string {
 	} else {
 		b.WriteString("\n")
 	}
-	b.WriteString(m.tbl.View())
+	b.WriteString(renderMatchTable(m.tbl, m.methodAtRow))
 	return b.String()
 }
 
@@ -746,7 +1036,7 @@ func (m MatchModel) viewDone(heading string) string {
 		m.tbl.SetWidth(m.width)
 		m.tbl.SetColumns(matchTableColumns(m.width))
 		m.tbl.SetRows(m.tableRows())
-		b.WriteString(m.tbl.View())
+		b.WriteString(renderMatchTable(m.tbl, m.methodAtRow))
 		b.WriteString("\n")
 		b.WriteString(m.renderTrackDetail(m.width - 4))
 	} else {
@@ -754,7 +1044,7 @@ func (m MatchModel) viewDone(heading string) string {
 		m.tbl.SetColumns(matchTableColumns(tableW))
 		m.tbl.SetRows(m.tableRows())
 		detail := panelStyle.Width(detailW).Height(m.contentHeight - 2).Render(m.renderTrackDetail(detailW - 2))
-		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, m.tbl.View(), "  ", detail))
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, renderMatchTable(m.tbl, m.methodAtRow), "  ", detail))
 	}
 
 	if m.editErr != "" {
@@ -852,17 +1142,46 @@ func (m MatchModel) viewOutcomes() string {
 }
 
 func (m MatchModel) viewList() string {
+	chips := m.renderStatusChips() + "\n\n"
+
 	listW := (m.width * 3) / 5
 	if listW < 30 {
-		return m.list.View()
+		return chips + m.list.View()
 	}
 	detailW := m.width - listW - 6
 	if detailW < 20 {
-		return m.list.View()
+		return chips + m.list.View()
 	}
 
 	detail := panelStyle.Width(detailW).Height(m.contentHeight - 2).Render(m.renderDetail(detailW - 2))
-	return lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), "  ", detail)
+	return chips + lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), "  ", detail)
+}
+
+// renderStatusChips shows how many loaded playlists already have a written
+// .m3u8 vs. don't, with the active statusFilter highlighted — both a quick
+// summary and a reminder that "m" cycles it.
+func (m MatchModel) renderStatusChips() string {
+	var hasFile, missing int
+	for _, p := range m.allPlaylists {
+		if p.hasFile {
+			hasFile++
+		} else {
+			missing++
+		}
+	}
+
+	chip := func(label string, count int, active bool) string {
+		text := fmt.Sprintf(" %s (%d) ", label, count)
+		if active {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(spotifyGreen).Bold(true).Render(text)
+		}
+		return dimStyle.Render(text)
+	}
+
+	return chip("All", len(m.allPlaylists), m.statusFilter == matchFilterAll) + " " +
+		chip("Has file", hasFile, m.statusFilter == matchFilterHasFile) + " " +
+		chip("Missing", missing, m.statusFilter == matchFilterMissing) + "   " +
+		fadedStyle.Render("m to cycle")
 }
 
 func (m MatchModel) renderDetail(width int) string {
@@ -885,10 +1204,27 @@ func (m MatchModel) renderDetail(width int) string {
 	}
 	row("Owner", owner)
 	row("Tracks", accentStyle.Render(fmt.Sprintf("%d", p.Tracks.Total)))
+	if it.hasFile {
+		row("File", successStyle.Render("✓ written"))
+	} else {
+		row("File", fadedStyle.Render("not written yet"))
+	}
 
 	if p.Description != "" {
 		b.WriteString("\n" + dimStyle.Render("Description") + "\n")
 		b.WriteString(bodyStyle.Width(width).Render(p.Description) + "\n")
+	}
+
+	b.WriteString("\n" + dimStyle.Render("Navidrome group") + "\n")
+	if m.editingGroup {
+		b.WriteString(m.groupInput.View() + "\n")
+		b.WriteString(fadedStyle.Render("enter to save (blank clears override) · esc to cancel") + "\n")
+	} else {
+		groupLine := bodyStyle.Render(it.group)
+		if _, custom := m.playlistGroups.Get(p.ID); custom {
+			groupLine += "  " + accentStyle.Render("(custom)")
+		}
+		b.WriteString(groupLine + "\n")
 	}
 
 	b.WriteString("\n")
@@ -896,6 +1232,9 @@ func (m MatchModel) renderDetail(width int) string {
 		b.WriteString(successStyle.Render("✓ selected for matching"))
 	} else {
 		b.WriteString(fadedStyle.Render("space to select for batch matching"))
+	}
+	if !m.editingGroup {
+		b.WriteString("  ·  " + fadedStyle.Render("g to edit group"))
 	}
 
 	return b.String()

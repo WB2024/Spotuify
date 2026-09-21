@@ -22,6 +22,14 @@ var (
 
 	errorRed  = lipgloss.AdaptiveColor{Light: "#b3261e", Dark: "#ff6b6b"}
 	warnAmber = lipgloss.AdaptiveColor{Light: "#8a5a00", Dark: "#e0af5f"}
+
+	// Results-table row background tints, one per match.Method — subtle
+	// enough not to fight with the text sitting on top of them in either
+	// light or dark terminals.
+	rowBgISRC    = lipgloss.AdaptiveColor{Light: "#e3f6e8", Dark: "#173620"}
+	rowBgFuzzy   = lipgloss.AdaptiveColor{Light: "#fbf0da", Dark: "#3a2f12"}
+	rowBgManual  = lipgloss.AdaptiveColor{Light: "#f1e9fc", Dark: "#2c2140"}
+	rowBgMissing = lipgloss.AdaptiveColor{Light: "#fbe4e1", Dark: "#3a1a18"}
 )
 
 var (

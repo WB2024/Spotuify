@@ -131,26 +131,28 @@ var exportDoneKeys = exportDoneKeyMap{
 // instead of "export" in the help text) ---
 
 type matchListKeyMap struct {
-	Up, Down, Toggle, SelectAll, Match, Filter, Back, Help key.Binding
+	Up, Down, Toggle, SelectAll, Match, Filter, StatusFilter, EditGroup, Back, Help key.Binding
 }
 
 func (k matchListKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Toggle, k.SelectAll, k.Match, k.Filter, k.Back, k.Help}
+	return []key.Binding{k.Toggle, k.SelectAll, k.Match, k.Filter, k.StatusFilter, k.EditGroup, k.Back, k.Help}
 }
 
 func (k matchListKeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{k.Up, k.Down}, {k.Toggle, k.SelectAll}, {k.Match, k.Filter}, {k.Back, k.Help}}
+	return [][]key.Binding{{k.Up, k.Down}, {k.Toggle, k.SelectAll}, {k.Match, k.Filter}, {k.StatusFilter, k.EditGroup}, {k.Back, k.Help}}
 }
 
 var matchListKeys = matchListKeyMap{
-	Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-	Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-	Toggle:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
-	SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select all")),
-	Match:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "match & write m3u8")),
-	Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-	Back:      key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back")),
-	Help:      globalKeys.Help,
+	Up:           key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:         key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Toggle:       key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
+	SelectAll:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select all")),
+	Match:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "match & write m3u8")),
+	Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter by name")),
+	StatusFilter: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "cycle has file/missing")),
+	EditGroup:    key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "edit Navidrome group")),
+	Back:         key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back")),
+	Help:         globalKeys.Help,
 }
 
 // --- Match: results table (Done screen) — "enter" opens the file picker to
