@@ -107,8 +107,9 @@ full key reference). `ctrl+c` quits from anywhere.
 Settings lets you set/change your Spotify Client ID and Secret, the export
 directory, the OAuth redirect port, whether cover art is downloaded, your
 Navidrome database path and music folder, the playlist output directory,
-and the two matching toggles (MusicBrainz resolution, fuzzy matching) — all
-written back to `.env` on Save. Changing credentials or hitting "Log out"
+the two matching toggles (MusicBrainz resolution, fuzzy matching), and
+optionally a Navidrome server URL/username/password for cover-art upload —
+all written back to `.env` on Save. Changing credentials or hitting "Log out"
 clears the cached session, so the next export/match re-triggers browser
 login.
 
@@ -248,13 +249,37 @@ For each playlist, under `<M3U8 output directory>/<playlist name>/`:
   with `#EXTINF` duration/artist/title and a path *relative to the `.m3u8`
   file itself* — the convention VLC, foobar2000, Kodi, and Plex all expect
   for a playlist that stays valid if the whole folder is moved. Also
-  includes a `#PLAYLIST:<name>` directive — that's what Navidrome uses as
-  the playlist's display name when it scans the file in (see below), not
-  the filename.
+  includes a `#PLAYLIST:Spotify/SR/<name>` directive — that's what
+  Navidrome/Feishin use as the playlist's *display* name (not the
+  filename) when it scans the file in, and the `/`s in it become a folder
+  hierarchy in their sidebar — verified directly against a live Feishin
+  client, which shows these grouped under Playlists › Spotify › SR.
 - **`missing.txt`** — a human-readable list of anything that couldn't be
   matched (artist, title, album, Spotify link), only written if there's
   anything to report.
 - **`cover.jpg`** — the playlist's cover art, same as the JSON/CSV export.
+  This is a local file for browsing outside Navidrome; see below for
+  getting it to show up *inside* Navidrome/Feishin's own UI.
+
+### Getting cover art to show up inside Navidrome/Feishin
+
+A `cover.jpg` sitting in a playlist's folder does **not** get picked up by
+Navidrome as that playlist's art — verified directly against the database
+(a playlist scanned in from a folder with a `cover.jpg` right next to its
+`.m3u8` still has an empty `uploaded_image` column). Navidrome only shows
+cover art on a playlist once it's been uploaded through its own REST API
+(`POST /api/playlist/{id}/image`), the same call its web UI makes when you
+manually set one.
+
+If you fill in **Navidrome server URL / username / password** in Settings
+("Navidrome Cover Art Upload"), Spotuify does this for you automatically
+after writing each playlist: it logs in (`POST /auth/login`) for a JWT,
+waits for Navidrome's own scanner to pick up the new `.m3u8` (checking its
+database every couple of seconds, since there's no ID to upload against
+until Navidrome has created the playlist row itself), then uploads the
+cover image. Leave those fields blank to skip this — the `.m3u8` and local
+`cover.jpg` still get written either way, the playlist just won't show art
+inside Navidrome/Feishin until you set one manually.
 
 ### Navidrome picks these up automatically
 
@@ -311,13 +336,17 @@ internal/config/      .env loading + persistence (Settings screen writes here)
 internal/auth/        Spotify OAuth (Authorization Code flow, token cache)
 internal/spotifyapi/  Spotify Web API client + models, rate-limit handling
 internal/export/      JSON/CSV writers for the Export screen
-internal/library/     loads a matchable index from Navidrome's SQLite database
-                       (navidrome.go) + the MusicBrainz ISRC-resolution client
-                       and its cache (musicbrainz.go, mbcache.go)
-internal/match/       the ISRC/fuzzy matching engine (match.go, normalize.go)
-internal/m3u8/        writes matched playlists as .m3u8 + missing-track
-                       reports + cover art, one folder per playlist
-internal/coverart/     shared cover-art downloader (used by export and m3u8)
+internal/library/      loads a matchable index from Navidrome's SQLite database
+                        (navidrome.go), the MusicBrainz ISRC-resolution
+                        client and its cache (musicbrainz.go, mbcache.go),
+                        and the read-only playlist-ID lookup used for cover
+                        art upload (playlistlookup.go)
+internal/match/         the ISRC/fuzzy matching engine (match.go, normalize.go)
+internal/m3u8/          writes matched playlists as .m3u8 + missing-track
+                        reports + cover art, one folder per playlist
+internal/navidromeapi/  authenticated client for Navidrome's own REST API —
+                        currently just playlist cover-art upload
+internal/coverart/      shared cover-art downloader (used by export and m3u8)
 internal/tui/          Bubble Tea UI — one screen per file (mainmenu.go,
                         settings.go, export_screen.go, match_screen.go),
                         sharing chrome.go (gradient logo, panel/help-bar

@@ -11,6 +11,7 @@ import (
 	"spotuify/internal/library"
 	"spotuify/internal/m3u8"
 	"spotuify/internal/match"
+	"spotuify/internal/navidromeapi"
 	"spotuify/internal/spotifyapi"
 )
 
@@ -25,12 +26,13 @@ const (
 // matchEvent is sent from the background matching goroutine to the Update
 // loop over a channel — same channel-pump pattern as exportEvent.
 type matchEvent struct {
-	kind         matchEventKind
-	text         string // for matchEventStatus
-	playlistName string // for matchEventPlaylistDone
-	results      []match.Result
-	write        *m3u8.Result
-	err          error // fetch/write failure for this playlist, if any
+	kind            matchEventKind
+	text            string // for matchEventStatus
+	playlistName    string // for matchEventPlaylistDone
+	results         []match.Result
+	write           *m3u8.Result
+	err             error  // fetch/write failure for this playlist, if any
+	coverUploadWarn string // non-fatal: cover art written locally but not uploaded to Navidrome
 }
 
 // runMatch fetches full track listings for each queued playlist, matches
@@ -45,6 +47,11 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 		resolver := library.NewMusicBrainzResolver(cfg.LibraryCachePath)
 		defer resolver.Close()
 		opts.Resolver = resolver
+	}
+
+	var ndClient *navidromeapi.Client
+	if cfg.HasNavidromeAPI() {
+		ndClient = navidromeapi.New(cfg.NavidromeAPIURL, cfg.NavidromeUsername, cfg.NavidromePassword)
 	}
 
 	for _, sp := range queue {
@@ -80,7 +87,17 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			continue
 		}
 
-		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, results: results, write: writeRes})
+		var coverUploadWarn string
+		if ndClient != nil && writeRes.CoverPath != "" {
+			err := uploadCoverArt(ctx, ndClient, cfg, writeRes.M3U8Path, writeRes.CoverPath, func(text string) {
+				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: %s", sp.Name, text)})
+			})
+			if err != nil {
+				coverUploadWarn = err.Error()
+			}
+		}
+
+		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, results: results, write: writeRes, coverUploadWarn: coverUploadWarn})
 	}
 
 	sendMatchEvent(ctx, ch, matchEvent{kind: matchEventAllDone})

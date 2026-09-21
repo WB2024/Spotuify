@@ -77,10 +77,17 @@ func Write(ctx context.Context, httpClient *http.Client, dir string, playlist *s
 	return res, nil
 }
 
+// navidromeGroup is the folder Navidrome/Feishin group Spotuify-generated
+// playlists under in their playlist sidebar — Navidrome treats "/" in a
+// #PLAYLIST directive as a UI folder hierarchy, not a filesystem path.
+// Matches this user's existing "Spotify/SR/<name>" convention so old and
+// new playlists sit in the same place.
+const navidromeGroup = "Spotify/SR/"
+
 func writeM3U8(path, outDir, playlistName string, results []match.Result, res *Result) error {
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
-	b.WriteString("#PLAYLIST:" + playlistName + "\n")
+	b.WriteString("#PLAYLIST:" + navidromeGroup + playlistName + "\n")
 
 	for _, r := range results {
 		if r.Item.Track == nil {

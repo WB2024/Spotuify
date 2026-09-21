@@ -24,6 +24,9 @@ const (
 	rowNavidromeDB
 	rowNavidromeMusicPath
 	rowM3U8Dir
+	rowNavidromeAPIURL
+	rowNavidromeAPIUsername
+	rowNavidromeAPIPassword
 	numTextRows // marks the end of the text-input rows (see inputs array)
 
 	rowDownloadCovers
@@ -93,6 +96,9 @@ func newSettings(cfg *config.Config) SettingsModel {
 	inputs[rowNavidromeDB] = mk("/path/to/navidrome/data/navidrome.db", cfg.NavidromeDBPath, false)
 	inputs[rowNavidromeMusicPath] = mk("/path/to/your/music", cfg.NavidromeMusicPath, false)
 	inputs[rowM3U8Dir] = mk("playlists", cfg.M3U8Dir, false)
+	inputs[rowNavidromeAPIURL] = mk("http://navidrome.example.com", cfg.NavidromeAPIURL, false)
+	inputs[rowNavidromeAPIUsername] = mk("Navidrome username", cfg.NavidromeUsername, false)
+	inputs[rowNavidromeAPIPassword] = mk("(not set — cover art upload skipped)", cfg.NavidromePassword, true)
 
 	return SettingsModel{
 		cfg:            cfg,
@@ -259,6 +265,9 @@ func (s *SettingsModel) doSave() bool {
 	s.cfg.M3U8Dir = m3u8Dir
 	s.cfg.ResolveMusicBrainzISRC = s.resolveMBID
 	s.cfg.EnableFuzzyMatching = s.fuzzyMatch
+	s.cfg.NavidromeAPIURL = strings.TrimRight(strings.TrimSpace(s.inputs[rowNavidromeAPIURL].Value()), "/")
+	s.cfg.NavidromeUsername = strings.TrimSpace(s.inputs[rowNavidromeAPIUsername].Value())
+	s.cfg.NavidromePassword = strings.TrimSpace(s.inputs[rowNavidromeAPIPassword].Value())
 
 	if err := s.cfg.Save(); err != nil {
 		s.status = "Save failed: " + err.Error()
@@ -344,6 +353,12 @@ func (s SettingsModel) View() string {
 		textRow(body, rowM3U8Dir, "Playlist output directory", "Where .m3u8 files, missing-track reports, and cover art are written")
 		toggleRow(body, rowResolveMBID, "Bridge via MusicBrainz for tracks with no ISRC tag (rate-limited, cached)", s.resolveMBID)
 		toggleRow(body, rowFuzzyMatch, "Fuzzy-match tracks with no ISRC/MusicBrainz data", s.fuzzyMatch)
+	})
+
+	group("Navidrome Cover Art Upload (optional)", func(body *strings.Builder) {
+		textRow(body, rowNavidromeAPIURL, "Navidrome server URL", "e.g. http://navidrome.example.com — leave blank to skip cover art upload")
+		textRow(body, rowNavidromeAPIUsername, "Navidrome username", "")
+		textRow(body, rowNavidromeAPIPassword, "Navidrome password", "Used only to log in via POST /auth/login for a JWT; never sent anywhere else")
 	})
 
 	actionRow := func(idx settingsRow, label string, style lipgloss.Style) string {

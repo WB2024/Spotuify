@@ -49,6 +49,18 @@ type Config struct {
 	// playlist.
 	M3U8Dir string
 
+	// NavidromeAPIURL, NavidromeUsername, and NavidromePassword authenticate
+	// against Navidrome's own REST API (distinct from the read-only database
+	// access above) — used only to upload a playlist's cover art, since
+	// Navidrome doesn't pick up a cover image file sitting in a playlist's
+	// folder the way it auto-imports the .m3u8 itself; that has to go
+	// through POST /api/playlist/{id}/image with a JWT obtained from
+	// POST /auth/login. Left blank, cover-art upload is skipped — the
+	// playlist and its local cover.jpg file still get written either way.
+	NavidromeAPIURL   string
+	NavidromeUsername string
+	NavidromePassword string
+
 	// ResolveMusicBrainzISRC controls whether, during matching, a Spotify
 	// track that didn't already match by tag gets bridged via the
 	// MusicBrainz API (looking up which recording(s) its ISRC belongs to,
@@ -81,16 +93,19 @@ type Config struct {
 }
 
 const (
-	envClientID       = "Spotify_ClientID"
-	envClientSecret   = "SpotifySecret"
-	envRedirectPort   = "SPOTIFY_REDIRECT_PORT"
-	envExportDir      = "SPOTUIFY_EXPORT_DIR"
-	envDownloadArt    = "SPOTUIFY_DOWNLOAD_COVERS"
-	envNavidromeDB    = "SPOTUIFY_NAVIDROME_DB"
-	envNavidromeMusic = "SPOTUIFY_NAVIDROME_MUSIC_PATH"
-	envM3U8Dir        = "SPOTUIFY_M3U8_DIR"
-	envResolveMBISRC  = "SPOTUIFY_RESOLVE_MUSICBRAINZ_ISRC"
-	envEnableFuzzy    = "SPOTUIFY_FUZZY_MATCH"
+	envClientID         = "Spotify_ClientID"
+	envClientSecret     = "SpotifySecret"
+	envRedirectPort     = "SPOTIFY_REDIRECT_PORT"
+	envExportDir        = "SPOTUIFY_EXPORT_DIR"
+	envDownloadArt      = "SPOTUIFY_DOWNLOAD_COVERS"
+	envNavidromeDB      = "SPOTUIFY_NAVIDROME_DB"
+	envNavidromeMusic   = "SPOTUIFY_NAVIDROME_MUSIC_PATH"
+	envM3U8Dir          = "SPOTUIFY_M3U8_DIR"
+	envResolveMBISRC    = "SPOTUIFY_RESOLVE_MUSICBRAINZ_ISRC"
+	envEnableFuzzy      = "SPOTUIFY_FUZZY_MATCH"
+	envNavidromeAPIURL  = "SPOTUIFY_NAVIDROME_API_URL"
+	envNavidromeAPIUser = "SPOTUIFY_NAVIDROME_API_USERNAME"
+	envNavidromeAPIPass = "SPOTUIFY_NAVIDROME_API_PASSWORD"
 )
 
 const defaultRedirectPort = 8080
@@ -145,6 +160,9 @@ func Load() (*Config, error) {
 		M3U8Dir:                m3u8Dir,
 		ResolveMusicBrainzISRC: resolveMBISRC,
 		EnableFuzzyMatching:    enableFuzzy,
+		NavidromeAPIURL:        os.Getenv(envNavidromeAPIURL),
+		NavidromeUsername:      os.Getenv(envNavidromeAPIUser),
+		NavidromePassword:      os.Getenv(envNavidromeAPIPass),
 		TokenCachePath:         tokenPath,
 		LibraryCachePath:       libraryCachePath,
 		EnvPath:                envPath,
@@ -192,6 +210,14 @@ func (c *Config) ValidateLibrary() error {
 	return nil
 }
 
+// HasNavidromeAPI reports whether Navidrome's own REST API is configured,
+// enabling playlist cover-art upload (see NavidromeAPIURL). It's not
+// required for matching itself — without it, playlists still get written
+// with a local cover.jpg, they just won't show art inside Navidrome/Feishin.
+func (c *Config) HasNavidromeAPI() bool {
+	return c.NavidromeAPIURL != "" && c.NavidromeUsername != "" && c.NavidromePassword != ""
+}
+
 // RedirectURI is the loopback URI Spotify redirects the user's browser back
 // to after they approve the app. Spotify requires this to match, byte for
 // byte, an entry registered in the app's dashboard settings, and (per
@@ -216,6 +242,9 @@ func (c *Config) Save() error {
 		{envM3U8Dir, c.M3U8Dir},
 		{envResolveMBISRC, strconv.FormatBool(c.ResolveMusicBrainzISRC)},
 		{envEnableFuzzy, strconv.FormatBool(c.EnableFuzzyMatching)},
+		{envNavidromeAPIURL, c.NavidromeAPIURL},
+		{envNavidromeAPIUser, c.NavidromeUsername},
+		{envNavidromeAPIPass, c.NavidromePassword},
 	}
 	return upsertEnvFile(c.EnvPath, values)
 }
