@@ -20,6 +20,7 @@ const (
 	screenMenu screen = iota
 	screenSettings
 	screenExport
+	screenMatch
 )
 
 // Model is the root Bubble Tea model for Spotuify. It owns cross-cutting
@@ -44,6 +45,7 @@ type Model struct {
 
 	settings SettingsModel
 	export   ExportModel
+	match    MatchModel
 
 	help help.Model
 
@@ -68,6 +70,7 @@ func New(ctx context.Context, cancel context.CancelFunc, cfg *config.Config) Mod
 		screen:   screenMenu,
 		settings: newSettings(cfg),
 		export:   newExportModel(cfg),
+		match:    newMatchModel(cfg),
 		help:     h,
 	}
 }
@@ -86,6 +89,9 @@ func (m Model) capturingText() bool {
 	if m.screen == screenExport && m.export.IsFiltering() {
 		return true
 	}
+	if m.screen == screenMatch && m.match.IsFiltering() {
+		return true
+	}
 	return false
 }
 
@@ -102,6 +108,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.help.Width = innerW
 		m.export.SetSize(innerW, innerH)
+		m.match.SetSize(innerW, innerH)
 		m.settings.SetSize(innerW)
 		return m, nil
 
@@ -132,6 +139,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenMenu
 		case settingsClientInvalidated:
 			m.export.InvalidateClient()
+			m.match.InvalidateClient()
 		}
 		return m, cmd
 
@@ -140,6 +148,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var action exportAction
 		m.export, cmd, action = m.export.Update(msg)
 		if action == exportActionBack {
+			m.backToMenu()
+		}
+		return m, cmd
+
+	case screenMatch:
+		var cmd tea.Cmd
+		var action matchAction
+		m.match, cmd, action = m.match.Update(msg)
+		if action == matchActionBack {
 			m.backToMenu()
 		}
 		return m, cmd
@@ -173,6 +190,8 @@ func (m Model) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.menuCursor {
 		case menuExport:
 			return m.startExportScreen()
+		case menuMatch:
+			return m.startMatchScreen()
 		case menuSettings:
 			m.screen = screenSettings
 			m.menuMessage = ""
@@ -192,6 +211,23 @@ func (m Model) startExportScreen() (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.export, cmd = m.export.Enter(m.opCtx())
+	return m, cmd
+}
+
+func (m Model) startMatchScreen() (tea.Model, tea.Cmd) {
+	if err := m.cfg.Validate(); err != nil {
+		m.menuMessage = err.Error()
+		return m, nil
+	}
+	if err := m.cfg.ValidateLibrary(); err != nil {
+		m.menuMessage = err.Error()
+		return m, nil
+	}
+	m.menuMessage = ""
+	m.screen = screenMatch
+
+	var cmd tea.Cmd
+	m.match, cmd = m.match.Enter(m.opCtx())
 	return m, cmd
 }
 
@@ -223,6 +259,9 @@ func (m Model) View() string {
 
 	case screenExport:
 		return frame(m.width, m.height, "Export Playlists", m.export.View(), renderHelp(m.help, m.export.Keys()))
+
+	case screenMatch:
+		return frame(m.width, m.height, "Match to Local Library", m.match.View(), renderHelp(m.help, m.match.Keys()))
 	}
 	return ""
 }

@@ -21,7 +21,15 @@ const (
 	rowClientSecret
 	rowExportDir
 	rowRedirectPort
+	rowNavidromeDB
+	rowNavidromeMusicPath
+	rowM3U8Dir
+	numTextRows // marks the end of the text-input rows (see inputs array)
+
 	rowDownloadCovers
+	rowResolveMBID
+	rowFuzzyMatch
+
 	rowLogout
 	rowSave
 	rowBack
@@ -47,8 +55,10 @@ const (
 type SettingsModel struct {
 	cfg *config.Config
 
-	inputs         [4]textinput.Model // indexed by rowClientID..rowRedirectPort
+	inputs         [numTextRows]textinput.Model // indexed by rowClientID..rowM3U8Dir
 	downloadCovers bool
+	resolveMBID    bool
+	fuzzyMatch     bool
 
 	cursor  settingsRow
 	editing bool
@@ -75,16 +85,21 @@ func newSettings(cfg *config.Config) SettingsModel {
 		return ti
 	}
 
-	var inputs [4]textinput.Model
+	var inputs [numTextRows]textinput.Model
 	inputs[rowClientID] = mk("Spotify Client ID", cfg.ClientID, false)
 	inputs[rowClientSecret] = mk("Spotify Client Secret", cfg.ClientSecret, true)
 	inputs[rowExportDir] = mk("exports", cfg.ExportDir, false)
 	inputs[rowRedirectPort] = mk("8080", strconv.Itoa(cfg.RedirectPort), false)
+	inputs[rowNavidromeDB] = mk("/path/to/navidrome/data/navidrome.db", cfg.NavidromeDBPath, false)
+	inputs[rowNavidromeMusicPath] = mk("/path/to/your/music", cfg.NavidromeMusicPath, false)
+	inputs[rowM3U8Dir] = mk("playlists", cfg.M3U8Dir, false)
 
 	return SettingsModel{
 		cfg:            cfg,
 		inputs:         inputs,
 		downloadCovers: cfg.DownloadCovers,
+		resolveMBID:    cfg.ResolveMusicBrainzISRC,
+		fuzzyMatch:     cfg.EnableFuzzyMatching,
 	}
 }
 
@@ -163,34 +178,32 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 		return s, nil, settingsNone
 
 	case key.Matches(msg, settingsNavKeys.Toggle):
-		if s.cursor == rowDownloadCovers {
-			s.downloadCovers = !s.downloadCovers
-		}
+		s.toggle(s.cursor)
 		return s, nil, settingsNone
 
 	case key.Matches(msg, settingsNavKeys.Edit):
-		switch s.cursor {
-		case rowClientID, rowClientSecret, rowExportDir, rowRedirectPort:
+		switch {
+		case s.cursor < numTextRows:
 			s.editing = true
 			s.status = ""
 			cmd := s.inputs[s.cursor].Focus()
 			return s, cmd, settingsNone
 
-		case rowDownloadCovers:
-			s.downloadCovers = !s.downloadCovers
+		case s.cursor == rowDownloadCovers, s.cursor == rowResolveMBID, s.cursor == rowFuzzyMatch:
+			s.toggle(s.cursor)
 			return s, nil, settingsNone
 
-		case rowLogout:
+		case s.cursor == rowLogout:
 			s.doLogout()
 			return s, nil, settingsClientInvalidated
 
-		case rowSave:
+		case s.cursor == rowSave:
 			if s.doSave() {
 				return s, nil, settingsClientInvalidated
 			}
 			return s, nil, settingsNone
 
-		case rowBack:
+		case s.cursor == rowBack:
 			return s, nil, settingsBack
 		}
 
@@ -199,6 +212,17 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 	}
 
 	return s, nil, settingsNone
+}
+
+func (s *SettingsModel) toggle(row settingsRow) {
+	switch row {
+	case rowDownloadCovers:
+		s.downloadCovers = !s.downloadCovers
+	case rowResolveMBID:
+		s.resolveMBID = !s.resolveMBID
+	case rowFuzzyMatch:
+		s.fuzzyMatch = !s.fuzzyMatch
+	}
 }
 
 // doSave validates and applies the form's values to cfg and persists them.
@@ -216,6 +240,10 @@ func (s *SettingsModel) doSave() bool {
 	if exportDir == "" {
 		exportDir = "exports"
 	}
+	m3u8Dir := strings.TrimSpace(s.inputs[rowM3U8Dir].Value())
+	if m3u8Dir == "" {
+		m3u8Dir = "playlists"
+	}
 
 	newClientID := strings.TrimSpace(s.inputs[rowClientID].Value())
 	newClientSecret := strings.TrimSpace(s.inputs[rowClientSecret].Value())
@@ -226,6 +254,11 @@ func (s *SettingsModel) doSave() bool {
 	s.cfg.ExportDir = exportDir
 	s.cfg.RedirectPort = port
 	s.cfg.DownloadCovers = s.downloadCovers
+	s.cfg.NavidromeDBPath = strings.TrimSpace(s.inputs[rowNavidromeDB].Value())
+	s.cfg.NavidromeMusicPath = strings.TrimSpace(s.inputs[rowNavidromeMusicPath].Value())
+	s.cfg.M3U8Dir = m3u8Dir
+	s.cfg.ResolveMusicBrainzISRC = s.resolveMBID
+	s.cfg.EnableFuzzyMatching = s.fuzzyMatch
 
 	if err := s.cfg.Save(); err != nil {
 		s.status = "Save failed: " + err.Error()
@@ -279,6 +312,21 @@ func (s SettingsModel) View() string {
 		}
 	}
 
+	toggleRow := func(body *strings.Builder, idx settingsRow, label string, on bool) {
+		selected := s.cursor == idx
+		marker := "  "
+		labelStyle := dimStyle
+		if selected {
+			marker = "▸ "
+			labelStyle = selectedRowStyle
+		}
+		box := "☐"
+		if on {
+			box = "☑"
+		}
+		body.WriteString(labelStyle.Render(marker+box+" "+label) + "\n")
+	}
+
 	group("Spotify Credentials", func(body *strings.Builder) {
 		textRow(body, rowClientID, "Client ID", "")
 		textRow(body, rowClientSecret, "Client Secret", "")
@@ -287,19 +335,15 @@ func (s SettingsModel) View() string {
 	group("Export Options", func(body *strings.Builder) {
 		textRow(body, rowExportDir, "Export directory", "Where playlist.json / tracks.csv / cover art are written")
 		textRow(body, rowRedirectPort, "OAuth redirect port", "Must match a Redirect URI in your Spotify Dashboard app: http://127.0.0.1:<port>/callback")
+		toggleRow(body, rowDownloadCovers, "Download cover art during export", s.downloadCovers)
+	})
 
-		selected := s.cursor == rowDownloadCovers
-		marker := "  "
-		labelStyle := dimStyle
-		if selected {
-			marker = "▸ "
-			labelStyle = selectedRowStyle
-		}
-		box := "☐"
-		if s.downloadCovers {
-			box = "☑"
-		}
-		body.WriteString(labelStyle.Render(marker+box+" Download cover art during export") + "\n")
+	group("Local Library Matching", func(body *strings.Builder) {
+		textRow(body, rowNavidromeDB, "Navidrome database path", "The navidrome.db file on this machine")
+		textRow(body, rowNavidromeMusicPath, "Navidrome music path", "This machine's path to Navidrome's music root (its ND_MUSICFOLDER)")
+		textRow(body, rowM3U8Dir, "Playlist output directory", "Where .m3u8 files, missing-track reports, and cover art are written")
+		toggleRow(body, rowResolveMBID, "Resolve MusicBrainz IDs via API (slow first time, cached after)", s.resolveMBID)
+		toggleRow(body, rowFuzzyMatch, "Fuzzy-match tracks with no ISRC/MusicBrainz data", s.fuzzyMatch)
 	})
 
 	actionRow := func(idx settingsRow, label string, style lipgloss.Style) string {

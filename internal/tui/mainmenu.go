@@ -10,6 +10,7 @@ type menuItem int
 
 const (
 	menuExport menuItem = iota
+	menuMatch
 	menuSettings
 	menuItemCount
 )
@@ -18,6 +19,8 @@ func (i menuItem) icon() string {
 	switch i {
 	case menuExport:
 		return "♪"
+	case menuMatch:
+		return "⇄"
 	case menuSettings:
 		return "⚙"
 	default:
@@ -29,6 +32,8 @@ func (i menuItem) label() string {
 	switch i {
 	case menuExport:
 		return "Export Playlists"
+	case menuMatch:
+		return "Match to Local Library"
 	case menuSettings:
 		return "Settings"
 	default:
@@ -40,6 +45,8 @@ func (i menuItem) description() string {
 	switch i {
 	case menuExport:
 		return "Browse your Spotify playlists and export them to JSON, CSV, and cover art"
+	case menuMatch:
+		return "Map playlist tracks to your Navidrome library and write .m3u8 playlists"
 	case menuSettings:
 		return "Spotify credentials, export location, and other options"
 	default:

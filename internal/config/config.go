@@ -31,9 +31,47 @@ type Config struct {
 	// Turning it off speeds up large batch exports.
 	DownloadCovers bool
 
+	// NavidromeDBPath is the path to Navidrome's navidrome.db on this
+	// machine — the source of truth for the local library (Navidrome has
+	// already scanned and tagged everything, MusicBrainz IDs included, so
+	// Spotuify reads its database rather than re-scanning files itself).
+	NavidromeDBPath string
+
+	// NavidromeMusicPath is this machine's path to the same music folder
+	// Navidrome mounts as its library root (its ND_MUSICFOLDER). Navidrome
+	// stores each track's path relative to that root — the same
+	// remote-path-mapping idea *arr apps use — so a local track's real
+	// path is filepath.Join(NavidromeMusicPath, <path from the database>).
+	NavidromeMusicPath string
+
+	// M3U8Dir is where generated .m3u8 playlists (and their accompanying
+	// missing-tracks reports and cover art) are written, one subfolder per
+	// playlist.
+	M3U8Dir string
+
+	// ResolveMusicBrainzISRC controls whether tracks that carry a
+	// MusicBrainz Recording ID (but no ISRC tag of their own) get their
+	// ISRC resolved via the MusicBrainz API when the library is loaded.
+	// This is what makes MusicBrainz-tagged tracks matchable by ISRC even
+	// when the file itself was never tagged with one directly. It's
+	// rate-limited to the MusicBrainz API's documented 1 request/second and
+	// cached indefinitely, so it only costs time the first time a given
+	// MusicBrainz ID is seen. Turning it off relies on direct ISRC tags
+	// (as Navidrome extracted them) and fuzzy matching only.
+	ResolveMusicBrainzISRC bool
+
+	// EnableFuzzyMatching controls whether tracks with no ISRC match (no
+	// tag, no resolvable MusicBrainz ID) fall back to normalized
+	// artist/title text similarity against the local library.
+	EnableFuzzyMatching bool
+
 	// TokenCachePath is where the OAuth token (incl. refresh token) is
 	// persisted between runs so the user isn't asked to log in every time.
 	TokenCachePath string
+
+	// LibraryCachePath is where resolved MusicBrainz-ID-to-ISRC lookups are
+	// cached between runs (see ResolveMusicBrainzISRC).
+	LibraryCachePath string
 
 	// EnvPath is where Save writes settings back to. It's the same .env
 	// file Load reads from.
@@ -41,11 +79,16 @@ type Config struct {
 }
 
 const (
-	envClientID     = "Spotify_ClientID"
-	envClientSecret = "SpotifySecret"
-	envRedirectPort = "SPOTIFY_REDIRECT_PORT"
-	envExportDir    = "SPOTUIFY_EXPORT_DIR"
-	envDownloadArt  = "SPOTUIFY_DOWNLOAD_COVERS"
+	envClientID       = "Spotify_ClientID"
+	envClientSecret   = "SpotifySecret"
+	envRedirectPort   = "SPOTIFY_REDIRECT_PORT"
+	envExportDir      = "SPOTUIFY_EXPORT_DIR"
+	envDownloadArt    = "SPOTUIFY_DOWNLOAD_COVERS"
+	envNavidromeDB    = "SPOTUIFY_NAVIDROME_DB"
+	envNavidromeMusic = "SPOTUIFY_NAVIDROME_MUSIC_PATH"
+	envM3U8Dir        = "SPOTUIFY_M3U8_DIR"
+	envResolveMBISRC  = "SPOTUIFY_RESOLVE_MUSICBRAINZ_ISRC"
+	envEnableFuzzy    = "SPOTUIFY_FUZZY_MATCH"
 )
 
 const defaultRedirectPort = 8080
@@ -73,11 +116,13 @@ func Load() (*Config, error) {
 		exportDir = "exports"
 	}
 
-	downloadCovers := true
-	if raw := os.Getenv(envDownloadArt); raw != "" {
-		if b, err := strconv.ParseBool(raw); err == nil {
-			downloadCovers = b
-		}
+	downloadCovers := parseBoolDefault(os.Getenv(envDownloadArt), true)
+	resolveMBISRC := parseBoolDefault(os.Getenv(envResolveMBISRC), true)
+	enableFuzzy := parseBoolDefault(os.Getenv(envEnableFuzzy), true)
+
+	m3u8Dir := os.Getenv(envM3U8Dir)
+	if m3u8Dir == "" {
+		m3u8Dir = "playlists"
 	}
 
 	cacheDir, err := os.UserCacheDir()
@@ -85,16 +130,34 @@ func Load() (*Config, error) {
 		cacheDir = "."
 	}
 	tokenPath := filepath.Join(cacheDir, "spotuify", "token.json")
+	libraryCachePath := filepath.Join(cacheDir, "spotuify", "mb_isrc_cache.json")
 
 	return &Config{
-		ClientID:       os.Getenv(envClientID),
-		ClientSecret:   os.Getenv(envClientSecret),
-		RedirectPort:   port,
-		ExportDir:      exportDir,
-		DownloadCovers: downloadCovers,
-		TokenCachePath: tokenPath,
-		EnvPath:        envPath,
+		ClientID:               os.Getenv(envClientID),
+		ClientSecret:           os.Getenv(envClientSecret),
+		RedirectPort:           port,
+		ExportDir:              exportDir,
+		DownloadCovers:         downloadCovers,
+		NavidromeDBPath:        os.Getenv(envNavidromeDB),
+		NavidromeMusicPath:     os.Getenv(envNavidromeMusic),
+		M3U8Dir:                m3u8Dir,
+		ResolveMusicBrainzISRC: resolveMBISRC,
+		EnableFuzzyMatching:    enableFuzzy,
+		TokenCachePath:         tokenPath,
+		LibraryCachePath:       libraryCachePath,
+		EnvPath:                envPath,
 	}, nil
+}
+
+func parseBoolDefault(raw string, def bool) bool {
+	if raw == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		return def
+	}
+	return b
 }
 
 // Validate reports whether the config has what it needs to authenticate
@@ -102,6 +165,27 @@ func Load() (*Config, error) {
 func (c *Config) Validate() error {
 	if c.ClientID == "" || c.ClientSecret == "" {
 		return fmt.Errorf("Spotify credentials are not set — open Settings and fill in Client ID / Client Secret")
+	}
+	return nil
+}
+
+// ValidateLibrary reports whether the config has what it needs to match
+// Spotify tracks against the Navidrome-indexed local library.
+func (c *Config) ValidateLibrary() error {
+	if c.NavidromeDBPath == "" || c.NavidromeMusicPath == "" {
+		return fmt.Errorf("Navidrome isn't configured — open Settings and set the database path and music folder")
+	}
+	if info, err := os.Stat(c.NavidromeDBPath); err != nil {
+		return fmt.Errorf("Navidrome database %q: %w", c.NavidromeDBPath, err)
+	} else if info.IsDir() {
+		return fmt.Errorf("Navidrome database path %q is a directory, not navidrome.db", c.NavidromeDBPath)
+	}
+	info, err := os.Stat(c.NavidromeMusicPath)
+	if err != nil {
+		return fmt.Errorf("Navidrome music path %q: %w", c.NavidromeMusicPath, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("Navidrome music path %q is not a directory", c.NavidromeMusicPath)
 	}
 	return nil
 }
@@ -125,6 +209,11 @@ func (c *Config) Save() error {
 		{envRedirectPort, strconv.Itoa(c.RedirectPort)},
 		{envExportDir, c.ExportDir},
 		{envDownloadArt, strconv.FormatBool(c.DownloadCovers)},
+		{envNavidromeDB, c.NavidromeDBPath},
+		{envNavidromeMusic, c.NavidromeMusicPath},
+		{envM3U8Dir, c.M3U8Dir},
+		{envResolveMBISRC, strconv.FormatBool(c.ResolveMusicBrainzISRC)},
+		{envEnableFuzzy, strconv.FormatBool(c.EnableFuzzyMatching)},
 	}
 	return upsertEnvFile(c.EnvPath, values)
 }

@@ -126,3 +126,29 @@ func (k exportDoneKeyMap) FullHelp() [][]key.Binding { return [][]key.Binding{{k
 var exportDoneKeys = exportDoneKeyMap{
 	Continue: key.NewBinding(key.WithKeys("enter", "esc", "q"), key.WithHelp("enter", "back to menu")),
 }
+
+// --- Match: playlist list (same shape as playlistListKeyMap, "match"
+// instead of "export" in the help text) ---
+
+type matchListKeyMap struct {
+	Up, Down, Toggle, SelectAll, Match, Filter, Back, Help key.Binding
+}
+
+func (k matchListKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Toggle, k.SelectAll, k.Match, k.Filter, k.Back, k.Help}
+}
+
+func (k matchListKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{{k.Up, k.Down}, {k.Toggle, k.SelectAll}, {k.Match, k.Filter}, {k.Back, k.Help}}
+}
+
+var matchListKeys = matchListKeyMap{
+	Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Toggle:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
+	SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select all")),
+	Match:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "match & write m3u8")),
+	Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+	Back:      key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back")),
+	Help:      globalKeys.Help,
+}

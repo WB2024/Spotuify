@@ -7,7 +7,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"spotuify/internal/coverart"
 	"spotuify/internal/spotifyapi"
 )
 
@@ -82,14 +82,12 @@ func (e *Exporter) Export(ctx context.Context, playlist *spotifyapi.FullPlaylist
 	res.CSVPath = csvPath
 
 	if e.DownloadCovers {
-		if img, ok := spotifyapi.BestImage(playlist.Images); ok {
-			coverPath, err := e.downloadCover(ctx, outDir, img.URL)
-			if err != nil {
-				// Cover art is a nice-to-have; don't fail the whole export over it.
-				fmt.Fprintf(os.Stderr, "warning: could not download cover art for %q: %v\n", playlist.Name, err)
-			} else {
-				res.CoverPath = coverPath
-			}
+		coverPath, err := coverart.Download(ctx, e.HTTPClient, playlist.Images, outDir)
+		if err != nil {
+			// Cover art is a nice-to-have; don't fail the whole export over it.
+			fmt.Fprintf(os.Stderr, "warning: could not download cover art for %q: %v\n", playlist.Name, err)
+		} else {
+			res.CoverPath = coverPath
 		}
 	}
 
@@ -175,47 +173,6 @@ func writeCSV(path string, playlist *spotifyapi.FullPlaylist, tracks []spotifyap
 func formatDuration(ms int) string {
 	total := ms / 1000
 	return fmt.Sprintf("%d:%02d", total/60, total%60)
-}
-
-func (e *Exporter) downloadCover(ctx context.Context, outDir, imgURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imgURL, nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := e.HTTPClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status %d downloading cover art", resp.StatusCode)
-	}
-
-	ext := extFromContentType(resp.Header.Get("Content-Type"))
-	coverPath := filepath.Join(outDir, "cover"+ext)
-	f, err := os.Create(coverPath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		return "", err
-	}
-	return coverPath, nil
-}
-
-func extFromContentType(ct string) string {
-	switch {
-	case strings.Contains(ct, "png"):
-		return ".png"
-	case strings.Contains(ct, "gif"):
-		return ".gif"
-	case strings.Contains(ct, "webp"):
-		return ".webp"
-	default:
-		return ".jpg" // Spotify's image CDN serves JPEG in the overwhelming majority of cases
-	}
 }
 
 var unsafeFilename = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)

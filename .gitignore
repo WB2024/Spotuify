@@ -12,6 +12,7 @@
 
 # Exports produced by the app
 /exports/
+/playlists/
 
 # OS / editor
 .DS_Store
