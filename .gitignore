@@ -1,0 +1,18 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Go
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Exports produced by the app
+/exports/
+
+# OS / editor
+.DS_Store
+*.swp
