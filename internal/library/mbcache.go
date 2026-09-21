@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 )
 
-// mbCacheEntry is what's cached for one MusicBrainz Recording ID. MusicBrainz
-// resolution is rate-limited to 1 request/second (see musicbrainz.go), so
-// caching it indefinitely — an MBID's ISRCs essentially never change — is
-// what keeps repeat library loads fast.
+// mbCacheEntry is what's cached for one ISRC. MusicBrainz resolution is
+// rate-limited to 1 request/second (see musicbrainz.go), so caching it
+// indefinitely — an ISRC's associated recordings essentially never
+// change — is what keeps repeat matches against the same tracks instant.
 type mbCacheEntry struct {
-	ISRCs    []string `json:"isrcs"`
-	Resolved bool     `json:"resolved"` // true once looked up, even if it came back empty
+	RecordingIDs []string `json:"recording_ids"`
+	Resolved     bool     `json:"resolved"` // true once looked up, even if it came back empty
 }
 
 type mbCache struct {
-	Entries map[string]mbCacheEntry `json:"entries"`
+	Entries map[string]mbCacheEntry `json:"entries"` // keyed by ISRC
 }
 
 func loadMBCache(path string) mbCache {

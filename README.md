@@ -199,28 +199,34 @@ Matching is tiered, from most to least certain:
 
 2. **MusicBrainz bridge.** Many files carry a MusicBrainz Recording ID
    (`mbz_recording_id`, written by taggers like Picard) but no ISRC tag of
-   their own. For those, Spotuify looks the recording up via the
-   MusicBrainz API (`GET /ws/2/recording/{mbid}?inc=isrcs`), which returns
-   every ISRC MusicBrainz has on file for that recording — and checks
-   those against the Spotify track's ISRC too. This is still tier 1 in
-   effect (ISRC-certain), it's just that the local side's ISRC had to be
-   fetched rather than read straight off the file. Looked into this
-   before building it: neither the MusicBrainz nor the ListenBrainz API
-   has a *direct* "give me a Spotify ID for this MusicBrainz ID" endpoint
-   (ListenBrainz's `metadata/lookup` goes the other way, text → MBID) — so
-   ISRC is the real bridge between the two services, not a shortcut around
-   one.
+   their own. For those tracks specifically, Spotuify takes the *Spotify*
+   track's ISRC and asks MusicBrainz which recording(s) it belongs to
+   (`GET /ws/2/isrc/{isrc}`), then checks those recording IDs against local
+   files' `mbz_recording_id`. Still ISRC-certain (tier 1 in effect) — the
+   ISRC just got resolved by looking sideways through MusicBrainz instead
+   of reading it straight off a tag. Looked into this before building it:
+   neither the MusicBrainz nor the ListenBrainz API has a *direct* "give me
+   a Spotify ID for this MusicBrainz ID" endpoint (ListenBrainz's
+   `metadata/lookup` goes the other way, text → MBID) — so ISRC is the
+   real bridge between the two services, not a shortcut around one.
 
-   This step is rate-limited to MusicBrainz's documented 1 request/second
-   and **cached indefinitely** (an MBID's ISRCs don't change), so it only
-   costs time the first time a given MusicBrainz ID is seen — cached in
-   `~/.cache/spotuify/mb_isrc_cache.json`, incrementally flushed every 20
-   lookups so a cancelled run doesn't lose progress. On a large library
-   with many MusicBrainz-tagged-but-not-ISRC-tagged files, this first pass
-   can take a while (thousands of files ÷ 1/second adds up) — `esc` cancels
-   cleanly at any point and resumes from where it left off next time. Turn
-   off "Resolve MusicBrainz IDs via API" in Settings to skip this entirely
-   and rely on direct ISRC tags + fuzzy matching only.
+   **This only runs for tracks that need it** — the ones tier 1 couldn't
+   already match by tag — so its cost is bounded by how much of the
+   playlist(s) you're matching *right now* is unmatched, not by the size
+   of your whole library. Earlier versions resolved every
+   MusicBrainz-tagged-but-not-ISRC-tagged file in the entire library up
+   front, the first time you opened the Match screen — on a library of
+   any real size that's hours of rate-limited waiting before matching even
+   starts, for a backlog mostly irrelevant to the one playlist you actually
+   wanted. Scoping it to the playlist being matched fixes that: matching a
+   typical playlist costs, at most, a couple of minutes of MusicBrainz
+   lookups instead. It's still rate-limited to MusicBrainz's documented 1
+   request/second and **cached indefinitely** (an ISRC's associated
+   recordings don't change) in `~/.cache/spotuify/mb_isrc_cache.json`,
+   flushed every 20 lookups so a cancelled run doesn't lose progress, and
+   `esc` cancels cleanly at any point. Turn off "Bridge via MusicBrainz..."
+   in Settings to skip this tier entirely and rely on direct ISRC tags +
+   fuzzy matching only.
 
 3. **Fuzzy fallback.** For anything left unmatched — no ISRC either
    side — a normalized artist/title similarity score (Levenshtein-based,

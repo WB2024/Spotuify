@@ -49,15 +49,17 @@ type Config struct {
 	// playlist.
 	M3U8Dir string
 
-	// ResolveMusicBrainzISRC controls whether tracks that carry a
-	// MusicBrainz Recording ID (but no ISRC tag of their own) get their
-	// ISRC resolved via the MusicBrainz API when the library is loaded.
-	// This is what makes MusicBrainz-tagged tracks matchable by ISRC even
-	// when the file itself was never tagged with one directly. It's
-	// rate-limited to the MusicBrainz API's documented 1 request/second and
-	// cached indefinitely, so it only costs time the first time a given
-	// MusicBrainz ID is seen. Turning it off relies on direct ISRC tags
-	// (as Navidrome extracted them) and fuzzy matching only.
+	// ResolveMusicBrainzISRC controls whether, during matching, a Spotify
+	// track that didn't already match by tag gets bridged via the
+	// MusicBrainz API (looking up which recording(s) its ISRC belongs to,
+	// then checking those against local files' embedded MusicBrainz
+	// Recording IDs). This only runs for tracks that still need it after
+	// the free tag-based match, so its cost is bounded by how much of the
+	// current playlist(s) is unmatched, not the size of the whole library.
+	// It's rate-limited to the MusicBrainz API's documented 1
+	// request/second and cached indefinitely, so a given ISRC only ever
+	// costs time once. Turning it off relies on direct ISRC tags (as
+	// Navidrome extracted them) and fuzzy matching only.
 	ResolveMusicBrainzISRC bool
 
 	// EnableFuzzyMatching controls whether tracks with no ISRC match (no
@@ -69,8 +71,8 @@ type Config struct {
 	// persisted between runs so the user isn't asked to log in every time.
 	TokenCachePath string
 
-	// LibraryCachePath is where resolved MusicBrainz-ID-to-ISRC lookups are
-	// cached between runs (see ResolveMusicBrainzISRC).
+	// LibraryCachePath is where resolved ISRC-to-MusicBrainz-recording
+	// lookups are cached between runs (see ResolveMusicBrainzISRC).
 	LibraryCachePath string
 
 	// EnvPath is where Save writes settings back to. It's the same .env

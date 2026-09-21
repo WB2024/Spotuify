@@ -105,11 +105,12 @@ type MatchModel struct {
 	libDone   int
 	libTotal  int
 
-	matchEvents chan matchEvent
-	rows        []matchRow
-	outcomes    []playlistOutcome
-	queueLen    int
-	queueDone   int
+	matchEvents   chan matchEvent
+	currentStatus string
+	rows          []matchRow
+	outcomes      []playlistOutcome
+	queueLen      int
+	queueDone     int
 }
 
 func newMatchModel(cfg *config.Config) MatchModel {
@@ -406,6 +407,7 @@ func (m MatchModel) startMatching() (MatchModel, tea.Cmd, matchAction) {
 
 	m.rows = nil
 	m.outcomes = nil
+	m.currentStatus = ""
 	m.queueLen = len(queue)
 	m.queueDone = 0
 	m.state = matchStateMatching
@@ -422,12 +424,11 @@ func (m MatchModel) startMatching() (MatchModel, tea.Cmd, matchAction) {
 func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchAction) {
 	switch ev.kind {
 	case matchEventStatus:
-		// Status text is folded into the row list once the playlist
-		// finishes; mid-flight it's only reflected in the eventual result,
-		// so there's nothing to update here beyond keeping the pump alive.
+		m.currentStatus = ev.text
 		return m, waitForMatchEvent(m.matchEvents), matchActionNone
 
 	case matchEventPlaylistDone:
+		m.currentStatus = ""
 		m.queueDone++
 		outcome := playlistOutcome{name: ev.playlistName, total: len(ev.results)}
 		if ev.err != nil {
@@ -505,15 +506,8 @@ func (m MatchModel) View() string {
 
 	case matchStateLoadingLibrary:
 		line := fmt.Sprintf("\n  %s Loading your local library from Navidrome...\n", m.spin.View())
-		if m.libPhase != "" {
-			if m.libTotal > 0 {
-				line += fmt.Sprintf("\n  %s: %d/%d\n", m.libPhase, m.libDone, m.libTotal)
-			} else {
-				line += fmt.Sprintf("\n  %s\n", m.libPhase)
-			}
-			if m.libPhase == string(library.PhaseResolving) {
-				line += "\n" + dimStyle.Render("  Resolving MusicBrainz IDs is rate-limited to ~1/second and cached —\n  safe to cancel (esc) and resume later; nothing already resolved is lost.") + "\n"
-			}
+		if m.libPhase != "" && m.libDone > 0 {
+			line += fmt.Sprintf("\n  %s: %d tracks\n", m.libPhase, m.libDone)
 		}
 		return line
 
@@ -548,7 +542,12 @@ func (m MatchModel) viewBatch(heading string) string {
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(heading) + "\n\n")
 	b.WriteString(m.prog.View())
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	if m.currentStatus != "" {
+		b.WriteString(dimStyle.Render(m.currentStatus) + "\n")
+	} else {
+		b.WriteString("\n")
+	}
 	b.WriteString(m.tbl.View())
 	return b.String()
 }

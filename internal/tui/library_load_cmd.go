@@ -24,10 +24,8 @@ func runLibraryLoad(ctx context.Context, cfg *config.Config, ch chan<- libraryLo
 	defer close(ch)
 
 	idx, err := library.Load(ctx, library.LoadConfig{
-		NavidromeDBPath:        cfg.NavidromeDBPath,
-		MusicPath:              cfg.NavidromeMusicPath,
-		CachePath:              cfg.LibraryCachePath,
-		ResolveMusicBrainzISRC: cfg.ResolveMusicBrainzISRC,
+		NavidromeDBPath: cfg.NavidromeDBPath,
+		MusicPath:       cfg.NavidromeMusicPath,
 	}, func(p library.Progress) {
 		select {
 		case ch <- libraryLoadEvent{Progress: p}:

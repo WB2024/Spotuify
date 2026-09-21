@@ -41,6 +41,11 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 	defer close(ch)
 
 	opts := match.Options{EnableFuzzy: cfg.EnableFuzzyMatching, FuzzyThreshold: match.DefaultOptions().FuzzyThreshold}
+	if cfg.ResolveMusicBrainzISRC {
+		resolver := library.NewMusicBrainzResolver(cfg.LibraryCachePath)
+		defer resolver.Close()
+		opts.Resolver = resolver
+	}
 
 	for _, sp := range queue {
 		if ctx.Err() != nil {
@@ -64,7 +69,9 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 		}
 
 		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: matching against local library...", sp.Name)})
-		results := match.All(tracks, idx, opts)
+		results := match.All(ctx, tracks, idx, opts, func(done, total int) {
+			sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: bridging %d/%d unmatched tracks via MusicBrainz...", sp.Name, done, total)})
+		})
 
 		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: writing .m3u8...", sp.Name)})
 		writeRes, err := m3u8.Write(ctx, httpClient, cfg.M3U8Dir, full, results, cfg.DownloadCovers)

@@ -14,6 +14,7 @@ import (
 type Index struct {
 	Tracks []Track
 	byISRC map[string]*Track
+	byMBID map[string]*Track
 }
 
 // ByISRC returns the local track carrying the given ISRC, if any.
@@ -22,6 +23,16 @@ func (idx *Index) ByISRC(isrc string) (*Track, bool) {
 		return nil, false
 	}
 	t, ok := idx.byISRC[isrc]
+	return t, ok
+}
+
+// ByMBID returns the local track carrying the given MusicBrainz Recording
+// ID, if any.
+func (idx *Index) ByMBID(mbid string) (*Track, bool) {
+	if idx == nil || mbid == "" {
+		return nil, false
+	}
+	t, ok := idx.byMBID[mbid]
 	return t, ok
 }
 
@@ -38,19 +49,13 @@ type LoadConfig struct {
 	// to that root, so a local track's full path is
 	// filepath.Join(MusicPath, media_file.path).
 	MusicPath string
-
-	CachePath              string
-	ResolveMusicBrainzISRC bool
 }
 
 // Phase identifies which stage of a load is in progress, for progress
 // reporting.
 type Phase string
 
-const (
-	PhaseReadingDB Phase = "reading Navidrome library"
-	PhaseResolving Phase = "resolving MusicBrainz IDs"
-)
+const PhaseReadingDB Phase = "reading Navidrome library"
 
 // Progress is reported periodically during Load.
 type Progress struct {
@@ -66,18 +71,12 @@ type ndTagValue struct {
 	Value string `json:"value"`
 }
 
-// Load reads every non-missing track from Navidrome's media_file table,
-// resolves ISRCs for MusicBrainz-tagged tracks that don't already carry one
-// (rate-limited and cached — see musicbrainz.go), and returns a
-// ready-to-use Index. It's cancelable via ctx; on cancellation, whatever
-// MusicBrainz resolution completed so far is still cached to disk.
+// Load reads every non-missing track from Navidrome's media_file table and
+// returns a ready-to-use Index. This is a plain database read — no
+// MusicBrainz API calls happen here (see MusicBrainzResolver for that,
+// invoked during matching itself, scoped to just the tracks that need it).
+// It's cancelable via ctx.
 func Load(ctx context.Context, cfg LoadConfig, progress func(Progress)) (*Index, error) {
-	report := func(p Progress) {
-		if progress != nil {
-			progress(p)
-		}
-	}
-
 	db, cleanup, err := openDB(ctx, cfg.NavidromeDBPath)
 	if err != nil {
 		return nil, err
@@ -90,83 +89,44 @@ func Load(ctx context.Context, cfg LoadConfig, progress func(Progress)) (*Index,
 	if err != nil {
 		return nil, fmt.Errorf("querying Navidrome database: %w", err)
 	}
+	defer rows.Close()
 
-	var raw []rawTrack
+	var tracks []Track
 
 	for rows.Next() {
 		var relPath, title, artist, album, mbid, tagsJSON string
 		var duration float64
 		if err := rows.Scan(&relPath, &title, &artist, &album, &duration, &mbid, &tagsJSON); err != nil {
-			rows.Close()
 			return nil, fmt.Errorf("reading Navidrome row: %w", err)
 		}
-		raw = append(raw, rawTrack{
-			track: Track{
-				Path:       filepath.Join(cfg.MusicPath, filepath.FromSlash(relPath)),
-				Title:      title,
-				Artist:     artist,
-				Album:      album,
-				DurationMs: int(duration * 1000),
-				MBID:       mbid,
-			},
-			tags: tagsJSON,
-		})
+
+		t := Track{
+			Path:       filepath.Join(cfg.MusicPath, filepath.FromSlash(relPath)),
+			Title:      title,
+			Artist:     artist,
+			Album:      album,
+			DurationMs: int(duration * 1000),
+			MBID:       mbid,
+		}
+		if isrcs := parseISRCTag(tagsJSON); len(isrcs) > 0 {
+			t.ISRC = isrcs[0]
+			t.ISRCAll = isrcs
+		}
+		tracks = append(tracks, t)
+
+		if progress != nil && len(tracks)%500 == 0 {
+			progress(Progress{Phase: PhaseReadingDB, Done: len(tracks)})
+		}
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return nil, fmt.Errorf("reading Navidrome rows: %w", err)
 	}
-	rows.Close()
 
-	report(Progress{Phase: PhaseReadingDB, Done: len(raw), Total: len(raw)})
-
-	for i := range raw {
-		if isrcs := parseISRCTag(raw[i].tags); len(isrcs) > 0 {
-			raw[i].track.ISRC = isrcs[0]
-			raw[i].track.ISRCAll = isrcs
-		}
+	if progress != nil {
+		progress(Progress{Phase: PhaseReadingDB, Done: len(tracks), Total: len(tracks)})
 	}
 
-	mbc := loadMBCache(cfg.CachePath)
-	if cfg.ResolveMusicBrainzISRC {
-		if err := resolveISRCs(ctx, cfg.CachePath, &mbc, pendingMBIDs(raw), report); err != nil {
-			return nil, err
-		}
-		for i := range raw {
-			t := &raw[i].track
-			if t.ISRC != "" || t.MBID == "" {
-				continue
-			}
-			if e, ok := mbc.Entries[t.MBID]; ok && len(e.ISRCs) > 0 {
-				t.ISRC = e.ISRCs[0]
-				t.ISRCAll = e.ISRCs
-			}
-		}
-	}
-
-	tracks := make([]Track, len(raw))
-	for i := range raw {
-		tracks[i] = raw[i].track
-	}
 	return buildIndex(tracks), nil
-}
-
-// rawTrack pairs a partially-built Track with its still-unparsed tags JSON.
-type rawTrack struct {
-	track Track
-	tags  string
-}
-
-func pendingMBIDs(raw []rawTrack) []string {
-	seen := make(map[string]bool)
-	var out []string
-	for _, r := range raw {
-		if r.track.MBID != "" && r.track.ISRC == "" && !seen[r.track.MBID] {
-			seen[r.track.MBID] = true
-			out = append(out, r.track.MBID)
-		}
-	}
-	return out
 }
 
 func parseISRCTag(tagsJSON string) []string {
@@ -190,56 +150,11 @@ func parseISRCTag(tagsJSON string) []string {
 	return out
 }
 
-func resolveISRCs(ctx context.Context, cachePath string, cache *mbCache, mbids []string, report func(Progress)) error {
-	var pending []string
-	for _, mbid := range mbids {
-		if e, ok := cache.Entries[mbid]; !ok || !e.Resolved {
-			pending = append(pending, mbid)
-		}
-	}
-	if len(pending) == 0 {
-		return nil
-	}
-
-	client := newMusicBrainzClient()
-	resolvedSinceFlush := 0
-
-	for i, mbid := range pending {
-		if err := ctx.Err(); err != nil {
-			_ = saveMBCache(cachePath, *cache)
-			return err
-		}
-
-		isrcs, err := client.ResolveISRCs(ctx, mbid)
-		if err != nil {
-			if ctx.Err() != nil {
-				_ = saveMBCache(cachePath, *cache)
-				return ctx.Err()
-			}
-			// Network/API hiccup: leave unresolved so it's retried next
-			// load, and move on rather than aborting the whole run.
-			report(Progress{Phase: PhaseResolving, Done: i + 1, Total: len(pending)})
-			continue
-		}
-
-		cache.Entries[mbid] = mbCacheEntry{ISRCs: isrcs, Resolved: true}
-
-		resolvedSinceFlush++
-		if resolvedSinceFlush >= 20 {
-			_ = saveMBCache(cachePath, *cache)
-			resolvedSinceFlush = 0
-		}
-
-		report(Progress{Phase: PhaseResolving, Done: i + 1, Total: len(pending)})
-	}
-
-	return saveMBCache(cachePath, *cache)
-}
-
 func buildIndex(tracks []Track) *Index {
-	idx := &Index{Tracks: tracks, byISRC: make(map[string]*Track)}
+	idx := &Index{Tracks: tracks, byISRC: make(map[string]*Track), byMBID: make(map[string]*Track)}
 	for i := range idx.Tracks {
 		t := &idx.Tracks[i]
+
 		isrcs := t.ISRCAll
 		if len(isrcs) == 0 && t.ISRC != "" {
 			isrcs = []string{t.ISRC}
@@ -250,6 +165,12 @@ func buildIndex(tracks []Track) *Index {
 			}
 			if _, exists := idx.byISRC[isrc]; !exists {
 				idx.byISRC[isrc] = t
+			}
+		}
+
+		if t.MBID != "" {
+			if _, exists := idx.byMBID[t.MBID]; !exists {
+				idx.byMBID[t.MBID] = t
 			}
 		}
 	}

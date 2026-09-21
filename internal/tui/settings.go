@@ -342,7 +342,7 @@ func (s SettingsModel) View() string {
 		textRow(body, rowNavidromeDB, "Navidrome database path", "The navidrome.db file on this machine")
 		textRow(body, rowNavidromeMusicPath, "Navidrome music path", "This machine's path to Navidrome's music root (its ND_MUSICFOLDER)")
 		textRow(body, rowM3U8Dir, "Playlist output directory", "Where .m3u8 files, missing-track reports, and cover art are written")
-		toggleRow(body, rowResolveMBID, "Resolve MusicBrainz IDs via API (slow first time, cached after)", s.resolveMBID)
+		toggleRow(body, rowResolveMBID, "Bridge via MusicBrainz for tracks with no ISRC tag (rate-limited, cached)", s.resolveMBID)
 		toggleRow(body, rowFuzzyMatch, "Fuzzy-match tracks with no ISRC/MusicBrainz data", s.fuzzyMatch)
 	})
 

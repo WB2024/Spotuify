@@ -11,10 +11,14 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// musicbrainzClient resolves a MusicBrainz Recording ID to its ISRC(s),
-// bridging a local file's embedded MusicBrainz tag to Spotify's ISRC
-// metadata. MusicBrainz's documented rate limit for API clients is 1
-// request/second; limiter enforces that regardless of caller concurrency.
+// musicbrainzClient bridges a Spotify track's ISRC to any local file
+// tagged with the corresponding MusicBrainz Recording ID, via
+// MusicBrainz's ISRC lookup (the reverse of looking up a recording's
+// ISRCs — this direction is what lets resolution stay scoped to the
+// tracks actually being matched, rather than every MusicBrainz-tagged
+// file in the whole library; see RecordingsForISRC). MusicBrainz's
+// documented rate limit for API clients is 1 request/second; the limiter
+// enforces that regardless of caller concurrency.
 type musicbrainzClient struct {
 	http    *http.Client
 	limiter *rate.Limiter
@@ -27,19 +31,21 @@ func newMusicBrainzClient() *musicbrainzClient {
 	}
 }
 
-type mbRecordingResponse struct {
-	ISRCs []string `json:"isrcs"`
+type mbISRCResponse struct {
+	Recordings []struct {
+		ID string `json:"id"`
+	} `json:"recordings"`
 }
 
-// ResolveISRCs fetches every ISRC MusicBrainz has on file for a recording.
-// A recording with no ISRC data returns (nil, nil) — a normal, non-error
-// outcome, not every recording has one recorded in MusicBrainz.
-func (c *musicbrainzClient) ResolveISRCs(ctx context.Context, mbid string) ([]string, error) {
+// RecordingsForISRC returns the MusicBrainz Recording IDs associated with
+// an ISRC. An ISRC MusicBrainz has never seen returns (nil, nil) — a
+// normal, non-error outcome, not every ISRC is in their database.
+func (c *musicbrainzClient) RecordingsForISRC(ctx context.Context, isrc string) ([]string, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
 
-	endpoint := fmt.Sprintf("https://musicbrainz.org/ws/2/recording/%s?inc=isrcs&fmt=json", url.PathEscape(mbid))
+	endpoint := fmt.Sprintf("https://musicbrainz.org/ws/2/isrc/%s?fmt=json", url.PathEscape(isrc))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -57,15 +63,20 @@ func (c *musicbrainzClient) ResolveISRCs(ctx context.Context, mbid string) ([]st
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil // recording doesn't exist (deleted/merged) — not a hard error
+		return nil, nil // ISRC not in MusicBrainz — not a hard error
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("musicbrainz api returned %d for recording %s", resp.StatusCode, mbid)
+		return nil, fmt.Errorf("musicbrainz api returned %d for isrc %s", resp.StatusCode, isrc)
 	}
 
-	var out mbRecordingResponse
+	var out mbISRCResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decoding musicbrainz response for %s: %w", mbid, err)
+		return nil, fmt.Errorf("decoding musicbrainz response for %s: %w", isrc, err)
 	}
-	return out.ISRCs, nil
+
+	ids := make([]string, len(out.Recordings))
+	for i, r := range out.Recordings {
+		ids[i] = r.ID
+	}
+	return ids, nil
 }
