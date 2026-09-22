@@ -161,11 +161,16 @@ const defaultNavidromeGroup = "Spotify/SR/"
 // Settings screen is where those get filled in. Real environment variables
 // always take precedence over what's in .env.
 func Load() (*Config, error) {
-	envPath, err := filepath.Abs(".env")
+	envPath, err := resolveEnvPath()
 	if err != nil {
-		envPath = ".env"
+		return nil, err
 	}
 	_ = godotenv.Load(envPath) // ignore error: .env is optional, real env vars still work
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = "."
+	}
 
 	port := defaultRedirectPort
 	if raw := os.Getenv(envRedirectPort); raw != "" {
@@ -176,7 +181,7 @@ func Load() (*Config, error) {
 
 	exportDir := os.Getenv(envExportDir)
 	if exportDir == "" {
-		exportDir = "exports"
+		exportDir = filepath.Join(homeDir, "Spotuify", "exports")
 	}
 
 	downloadCovers := parseBoolDefault(os.Getenv(envDownloadArt), true)
@@ -185,7 +190,7 @@ func Load() (*Config, error) {
 
 	m3u8Dir := os.Getenv(envM3U8Dir)
 	if m3u8Dir == "" {
-		m3u8Dir = "playlists"
+		m3u8Dir = filepath.Join(homeDir, "Spotuify", "playlists")
 	}
 
 	navidromeGroup := os.Getenv(envNavidromeGroup)
@@ -231,6 +236,32 @@ func Load() (*Config, error) {
 		LibraryCachePath:        libraryCachePath,
 		EnvPath:                 envPath,
 	}, nil
+}
+
+// resolveEnvPath decides which .env file Load reads from (and Save later
+// writes back to), so the app behaves identically wherever it's run from:
+//
+//  1. $SPOTUIFY_ENV, if set — an explicit override.
+//  2. ./.env, if one exists in the current directory — lets a git checkout
+//     (this repo during development, or anyone else's clone) keep working
+//     exactly as documented without needing anything installed globally.
+//  3. Otherwise a fixed, cwd-independent location (~/.config/spotuify/.env
+//     on Linux, the platform's user-config directory elsewhere) — what
+//     makes running an installed `spotuify` binary from any directory use
+//     the same settings every time, rather than silently reading whatever
+//     unrelated .env (or none) happens to sit in the current directory.
+func resolveEnvPath() (string, error) {
+	if p := os.Getenv("SPOTUIFY_ENV"); p != "" {
+		return filepath.Abs(p)
+	}
+	if info, err := os.Stat(".env"); err == nil && !info.IsDir() {
+		return filepath.Abs(".env")
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		configDir = "."
+	}
+	return filepath.Join(configDir, "spotuify", ".env"), nil
 }
 
 func parseBoolDefault(raw string, def bool) bool {

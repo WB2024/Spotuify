@@ -32,11 +32,23 @@ Early. More features can be layered onto this foundation over time.
    loopback redirects.) If you'd rather use a different port, set
    `SPOTIFY_REDIRECT_PORT` in `.env` and update the dashboard to match.
 
-3. **`.env` file.** You already have one in the repo root with
-   `Spotify_ClientID` and `SpotifySecret` set — it's gitignored, so it won't
-   be committed. `.env.example` documents the format if you need to recreate
-   it. You can also skip this step entirely and fill credentials in from the
-   app's own Settings screen instead (see below).
+3. **`.env` file.** Where Spotuify reads/writes this (`Spotify_ClientID`,
+   `SpotifySecret`, and everything else Settings can edit) depends on how
+   you run it, checked in this order:
+
+   1. `$SPOTUIFY_ENV`, if set — an explicit override.
+   2. `./.env`, if one exists in the current directory — what a git
+      checkout uses by default; it's gitignored, so it won't be committed.
+   3. Otherwise a fixed, cwd-independent location: `~/.config/spotuify/.env`
+      on Linux, the platform's user-config directory elsewhere.
+
+   That third case is what makes an installed `spotuify` binary (see
+   "Installing it" below) behave identically no matter which directory you
+   run it from, rather than silently reading whatever unrelated `.env` (or
+   none) happens to be lying around. `.env.example` documents the format if
+   you're creating one by hand. You can also skip this entirely and fill
+   credentials in from the app's own Settings screen instead (see below) —
+   it writes back to whichever `.env` this resolution found.
 
 4. **Navidrome (optional — only needed for "Match to Local Library").** If
    you run a [Navidrome](https://www.navidrome.org/) server over your music
@@ -65,6 +77,27 @@ Early. More features can be layered onto this foundation over time.
    token is cached in your OS user-cache directory (e.g.
    `~/.cache/spotuify/token.json` on Linux) so you won't be asked
    again until it's revoked or you log out from Settings.
+
+### Installing it
+
+To run `spotuify` as a normal command from any directory, put the binary
+somewhere on your `PATH` — `~/.local/bin` is the usual spot on Linux (add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell rc file if it isn't
+there already):
+
+```bash
+go build -o ~/.local/bin/spotuify ./cmd/spotuify
+```
+
+Because config resolution falls back to `~/.config/spotuify/.env` once
+there's no `./.env` in whatever directory you happen to be in (see above),
+this just works — no environment variables to set, no need to `cd` into
+the repo first. If you'd been running it out of a repo-root `.env` before
+installing it this way, move that file to `~/.config/spotuify/.env` (and
+fix any relative paths in it, like a bare `SPOTUIFY_EXPORT_DIR=exports`,
+to absolute ones) so both places see the same settings instead of two
+quietly diverging copies. Re-run the `go build` line above after pulling
+changes to update it.
 
 ## Using it
 
