@@ -43,15 +43,15 @@ var menuKeys = menuKeyMap{
 // --- Settings: navigating rows ---
 
 type settingsNavKeyMap struct {
-	Up, Down, Edit, Toggle, Back, Help key.Binding
+	Up, Down, Edit, Toggle, Save, Back, Help key.Binding
 }
 
 func (k settingsNavKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Edit, k.Toggle, k.Back, k.Help}
+	return []key.Binding{k.Up, k.Down, k.Edit, k.Toggle, k.Save, k.Back, k.Help}
 }
 
 func (k settingsNavKeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{k.Up, k.Down}, {k.Edit, k.Toggle}, {k.Back, k.Help}}
+	return [][]key.Binding{{k.Up, k.Down}, {k.Edit, k.Toggle}, {k.Save}, {k.Back, k.Help}}
 }
 
 var settingsNavKeys = settingsNavKeyMap{
@@ -59,11 +59,17 @@ var settingsNavKeys = settingsNavKeyMap{
 	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
 	Edit:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit/select")),
 	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+	Save:   key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 	Back:   key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back")),
 	Help:   globalKeys.Help,
 }
 
 // --- Settings: editing a field ---
+//
+// Also reused as-is by the Match screen's inline "edit Navidrome group"
+// field (match_screen.go) — that one has no Save concept, so it stays
+// just Confirm; see settingsFieldEditKeys below for Settings' own
+// editing-state keymap, which adds ctrl+s.
 
 type settingsEditKeyMap struct {
 	Confirm key.Binding
@@ -76,6 +82,26 @@ func (k settingsEditKeyMap) FullHelp() [][]key.Binding {
 
 var settingsEditKeys = settingsEditKeyMap{
 	Confirm: key.NewBinding(key.WithKeys("enter", "esc"), key.WithHelp("enter/esc", "confirm field")),
+}
+
+// settingsFieldEditKeyMap is Settings' own text-field-editing keymap — like
+// settingsEditKeyMap, plus ctrl+s to confirm the field and save the whole
+// form in one step.
+type settingsFieldEditKeyMap struct {
+	Confirm key.Binding
+	Save    key.Binding
+}
+
+func (k settingsFieldEditKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Confirm, k.Save}
+}
+func (k settingsFieldEditKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{{k.Confirm}, {k.Save}}
+}
+
+var settingsFieldEditKeys = settingsFieldEditKeyMap{
+	Confirm: settingsEditKeys.Confirm,
+	Save:    settingsNavKeys.Save,
 }
 
 // --- Export: playlist list ---

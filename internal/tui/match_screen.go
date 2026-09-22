@@ -1247,7 +1247,15 @@ func (m MatchModel) viewFilePicker() string {
 		if artist := artistList(r.Item.Track.Artists); artist != "" {
 			track = artist + " – " + track
 		}
-		b.WriteString(dimStyle.Render(fmt.Sprintf("%s  ·  %s", playlistName, track)) + "\n")
+		b.WriteString(bodyStyle.Render(track) + "\n")
+		if album := r.Item.Track.Album.Name; album != "" {
+			// The whole point of showing this: it's what you're actually
+			// hunting for in the picker below — the artist/track alone
+			// doesn't tell you which of an artist's several albums to go
+			// into.
+			b.WriteString(dimStyle.Render("Album: ") + accentStyle.Render(album) + "\n")
+		}
+		b.WriteString(dimStyle.Render(playlistName) + "\n")
 	}
 	b.WriteString(fadedStyle.Render(m.editingRoot) + "\n\n")
 
@@ -1255,8 +1263,20 @@ func (m MatchModel) viewFilePicker() string {
 		b.WriteString(errorStyle.Render(m.editErr) + "\n\n")
 	}
 
-	b.WriteString(m.fp.View())
-	return b.String()
+	header := b.String()
+
+	// The header above is a variable number of lines (whether there's an
+	// album, an error, or long text that wraps at a narrow width), so the
+	// picker's own height is set here, against however tall that header
+	// actually rendered, rather than as a fixed guess in SetSize — a
+	// static guess would risk the same overflow bug the results table had
+	// (content taller than the terminal, which then scrolls on its own
+	// and cuts the chrome off above it). Safe to set on every render:
+	// filepicker.SetHeight only ever clamps its scroll window to fit, it
+	// doesn't reset navigation state.
+	m.fp.SetHeight(clampInt(m.contentHeight-lipgloss.Height(header), 5, m.contentHeight))
+
+	return header + m.fp.View()
 }
 
 func (m MatchModel) viewOutcomes() string {

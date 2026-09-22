@@ -109,7 +109,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help.Width = innerW
 		m.export.SetSize(innerW, innerH)
 		m.match.SetSize(innerW, innerH)
-		m.settings.SetSize(innerW)
+		m.settings.SetSize(innerW, innerH)
 		return m, nil
 
 	case tea.KeyMsg:

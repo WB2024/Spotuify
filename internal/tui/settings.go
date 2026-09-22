@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -91,7 +92,8 @@ type SettingsModel struct {
 	status    string
 	statusErr bool
 
-	width int
+	width, height int
+	viewport      viewport.Model
 }
 
 func newSettings(cfg *config.Config) SettingsModel {
@@ -125,6 +127,8 @@ func newSettings(cfg *config.Config) SettingsModel {
 	inputs[rowLidarrURL] = mk("http://lidarr.example.com:8686 — leave blank to disable", cfg.LidarrURL, false)
 	inputs[rowLidarrAPIKey] = mk("Lidarr API key (Settings › General in Lidarr)", cfg.LidarrAPIKey, true)
 
+	vp := viewport.New(0, 0)
+
 	return SettingsModel{
 		cfg:              cfg,
 		inputs:           inputs,
@@ -135,6 +139,7 @@ func newSettings(cfg *config.Config) SettingsModel {
 		lidarrQualityID:  cfg.LidarrQualityProfileID,
 		lidarrMetadataID: cfg.LidarrMetadataProfileID,
 		lidarrAddSearch:  cfg.LidarrAddAndSearch,
+		viewport:         vp,
 	}
 }
 
@@ -297,7 +302,7 @@ func idLabel(id int) string {
 // Keys returns the keymap currently in effect, for the shared help bar.
 func (s SettingsModel) Keys() help.KeyMap {
 	if s.editing {
-		return settingsEditKeys
+		return settingsFieldEditKeys
 	}
 	return settingsNavKeys
 }
@@ -309,9 +314,18 @@ func (s SettingsModel) IsEditing() bool { return s.editing }
 
 // SetSize propagates a terminal resize so the credential/options panels
 // stay a consistent width instead of each auto-sizing to its own longest
-// line.
-func (s *SettingsModel) SetSize(width int) {
+// line, and so the form's scrollable viewport (the whole form is taller
+// than one screenful — see View) knows how much space it actually has.
+func (s *SettingsModel) SetSize(width, height int) {
 	s.width = width
+	s.height = height
+	s.viewport.Width = width
+	// Reserve 2 lines for the status footer (see View) so a save/logout
+	// confirmation - triggered by ctrl+s from anywhere, not just the Save
+	// row - is always visible instead of landing wherever the scrollable
+	// content happens to be, off-screen more often than not.
+	s.viewport.Height = clampInt(height-2, 3, height)
+	s.followCursor() // a shrinking terminal can push the current row out of view
 }
 
 const settingsPanelMaxWidth = 78
@@ -353,11 +367,32 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd, settingsActi
 		s.inputs[s.cursor], cmd = s.inputs[s.cursor].Update(msg)
 		return s, cmd, settingsNone
 	}
-	return s, nil, settingsNone
+	// Mouse wheel scrolling (viewport handles tea.MouseMsg natively,
+	// unlike table/list elsewhere in this app) and anything else that
+	// isn't cursor navigation, which handleKey already fully owns.
+	//
+	// SetContent must run here (a pointer-friendly path whose result is
+	// returned and persisted), not in View, which runs on a value receiver
+	// - any state View mutates is a throwaway copy, so if SetContent only
+	// ever ran there the viewport's line buffer would stay permanently
+	// empty and every scroll would clamp straight back to 0.
+	content, _ := s.renderContent()
+	s.viewport.SetContent(content)
+	var cmd tea.Cmd
+	s.viewport, cmd = s.viewport.Update(msg)
+	return s, cmd, settingsNone
 }
 
 func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settingsAction) {
 	if s.editing {
+		if key.Matches(msg, settingsFieldEditKeys.Save) {
+			s.inputs[s.cursor].Blur()
+			s.editing = false
+			if s.doSave() {
+				return s, nil, settingsClientInvalidated
+			}
+			return s, nil, settingsNone
+		}
 		if key.Matches(msg, settingsEditKeys.Confirm) {
 			s.inputs[s.cursor].Blur()
 			s.editing = false
@@ -368,6 +403,13 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 		return s, cmd, settingsNone
 	}
 
+	if key.Matches(msg, settingsNavKeys.Save) {
+		if s.doSave() {
+			return s, nil, settingsClientInvalidated
+		}
+		return s, nil, settingsNone
+	}
+
 	switch {
 	case key.Matches(msg, settingsNavKeys.Up):
 		if s.cursor > 0 {
@@ -375,6 +417,7 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 			if s.cursor == numTextRows { // marker value, not a row
 				s.cursor--
 			}
+			s.followCursor()
 		}
 		return s, nil, settingsNone
 
@@ -384,6 +427,7 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 			if s.cursor == numTextRows {
 				s.cursor++
 			}
+			s.followCursor()
 		}
 		return s, nil, settingsNone
 
@@ -509,7 +553,12 @@ func (s *SettingsModel) doLogout() {
 	s.statusErr = false
 }
 
-func (s SettingsModel) View() string {
+// renderContent builds the form's full text content (every group, field,
+// hint, and the action row) and reports which line the currently-selected
+// row landed on — see settingsCursorMarker and the View/followCursor split
+// below for why the two are bundled into one method rather than measured
+// separately.
+func (s SettingsModel) renderContent() (string, int) {
 	var b strings.Builder
 	panelW := s.panelWidth()
 
@@ -525,11 +574,13 @@ func (s SettingsModel) View() string {
 		selected := s.cursor == idx
 		marker := "  "
 		labelStyle := dimStyle
+		mark := ""
 		if selected {
 			marker = "▸ "
 			labelStyle = selectedRowStyle
+			mark = settingsCursorMarker
 		}
-		b.WriteString(labelStyle.Render(marker+label) + "\n")
+		b.WriteString(mark + labelStyle.Render(marker+label) + "\n")
 		fieldStyle := lipgloss.NewStyle()
 		if selected && s.editing {
 			fieldStyle = fieldStyle.Foreground(spotifyGreen)
@@ -544,15 +595,17 @@ func (s SettingsModel) View() string {
 		selected := s.cursor == idx
 		marker := "  "
 		labelStyle := dimStyle
+		mark := ""
 		if selected {
 			marker = "▸ "
 			labelStyle = selectedRowStyle
+			mark = settingsCursorMarker
 		}
 		box := "☐"
 		if on {
 			box = "☑"
 		}
-		body.WriteString(labelStyle.Render(marker+box+" "+label) + "\n")
+		body.WriteString(mark + labelStyle.Render(marker+box+" "+label) + "\n")
 	}
 
 	group("Spotify Credentials", func(body *strings.Builder) {
@@ -585,11 +638,13 @@ func (s SettingsModel) View() string {
 		selected := s.cursor == idx
 		marker := "  "
 		labelStyle := dimStyle
+		mark := ""
 		if selected {
 			marker = "▸ "
 			labelStyle = selectedRowStyle
+			mark = settingsCursorMarker
 		}
-		body.WriteString(labelStyle.Render(marker+label) + "\n")
+		body.WriteString(mark + labelStyle.Render(marker+label) + "\n")
 		body.WriteString("    " + s.lidarrOptionLabel(idx) + "\n")
 		if hint != "" {
 			body.WriteString(fadedStyle.Width(panelW-4).Render("    "+hint) + "\n")
@@ -609,11 +664,13 @@ func (s SettingsModel) View() string {
 		selected := s.cursor == idx
 		marker := "  "
 		labelStyle := style
+		mark := ""
 		if selected {
 			marker = "▸ "
 			labelStyle = style.Bold(true).Underline(true)
+			mark = settingsCursorMarker
 		}
-		return labelStyle.Render(marker + label)
+		return mark + labelStyle.Render(marker+label)
 	}
 
 	actions := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -625,13 +682,63 @@ func (s SettingsModel) View() string {
 	)
 	b.WriteString(actions + "\n")
 
+	content := b.String()
+	selectedLine := 0
+	if idx := strings.IndexByte(content, 0); idx >= 0 {
+		selectedLine = strings.Count(content[:idx], "\n")
+		content = content[:idx] + content[idx+1:]
+	}
+	return content, selectedLine
+}
+
+// settingsCursorMarker is a sentinel prefixed onto whichever row's label is
+// currently selected, purely so renderContent can find out which line that
+// row landed on in the *final*, fully-rendered output (after every group's
+// border/padding and any hint-text wrapping has already happened) without
+// having to predict any of that ahead of time — it just searches the real
+// output. Stripped before renderContent returns. A raw NUL byte never
+// appears in this form's own content otherwise, so there's no ambiguity to
+// worry about.
+const settingsCursorMarker = "\x00"
+
+// View renders the form through the viewport — this is what makes it
+// scrollable at all (previously the whole form, every group/field/hint,
+// was dumped as one unbounded string, so a terminal shorter than that
+// could only ever show whatever portion the terminal's own scrollback
+// happened to land on, with no way back up). It deliberately does *not*
+// touch the viewport's scroll position itself — see followCursor for why.
+func (s SettingsModel) View() string {
+	content, _ := s.renderContent()
+	s.viewport.SetContent(content)
+	view := s.viewport.View()
 	if s.status != "" {
 		st := successStyle
 		if s.statusErr {
 			st = errorStyle
 		}
-		b.WriteString("\n" + st.Render(s.status) + "\n")
+		view += "\n\n" + st.Render(s.status)
 	}
+	return view
+}
 
-	return b.String()
+// followCursor scrolls just enough to keep the current row in view, with a
+// little breathing room, rather than jammed right against the top or
+// bottom edge. Called from handleKey whenever s.cursor actually moves —
+// deliberately *not* from View, which runs on every single render
+// (including a mouse-wheel scroll, which doesn't move the cursor at all):
+// snapping back to the cursor's row on every render would fight, and
+// immediately undo, any independent wheel scrolling within the same frame.
+func (s *SettingsModel) followCursor() {
+	content, selectedLine := s.renderContent()
+	// Persist the content into the real model's viewport (a pointer
+	// receiver, unlike View's) so maxYOffset reflects the actual line
+	// count - otherwise SetYOffset below always clamps back to 0.
+	s.viewport.SetContent(content)
+	const scrollMargin = 2
+	switch {
+	case selectedLine < s.viewport.YOffset+scrollMargin:
+		s.viewport.SetYOffset(selectedLine - scrollMargin)
+	case selectedLine > s.viewport.YOffset+s.viewport.Height-1-scrollMargin:
+		s.viewport.SetYOffset(selectedLine - s.viewport.Height + 1 + scrollMargin)
+	}
 }

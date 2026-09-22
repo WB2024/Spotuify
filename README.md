@@ -154,7 +154,10 @@ table also responds to the mouse wheel, in addition to the keyboard.
   filter) above the table; `0` clears back to showing everything.
 - `enter` on any row — matched, fuzzy, manual, or missing — opens a file
   picker scoped to your Navidrome music folder so you can browse to and pick
-  the correct file yourself. Selecting one immediately rewrites that
+  the correct file yourself, headed by the track, artist, **album**, and
+  playlist you're fixing so you know which of an artist's several albums to
+  go into without having to remember it from the results table behind it.
+  Selecting one immediately rewrites that
   playlist's `.m3u8` (and drops `missing.txt` if nothing's missing anymore);
   no need to re-run the match. `esc` backs up a folder, or cancels the edit
   entirely once you're back at the music folder's root. The correction is
@@ -176,13 +179,23 @@ table also responds to the mouse wheel, in addition to the keyboard.
   can't identify confidently is reported rather than guessed at.
 
 **Settings:**
-- `↑`/`↓` — move between fields
+- `↑`/`↓` / mouse wheel — move between fields / scroll; the whole form is
+  taller than one screenful, so this scrolls a viewport rather than dumping
+  everything at once — arrow keys keep the highlighted field in view as you
+  move past either edge, and the mouse wheel scrolls independently of it
 - `enter` — edit the highlighted field (text fields), or activate an action
   row (Log out / Save / Back)
 - while editing a field: type normally, `enter`/`esc` to confirm and stop
   editing
 - `space` — toggle a checkbox field (e.g. Download cover art)
-- `esc` (when not editing) — back to the main menu
+- `ctrl+s` — save from anywhere, whether or not you're on the Save row (or
+  even mid-edit in a field) — no need to scroll all the way down just to
+  save a change at the top
+- `esc` (works from anywhere, not just the Back row, and not while editing)
+  — back to the main menu
+
+Save/logout confirmations (and errors) show in a status line pinned right
+under the form, so they're visible regardless of where you're scrolled to.
 
 Settings lets you set/change your Spotify Client ID and Secret, the export
 directory, the OAuth redirect port, whether cover art is downloaded, your
