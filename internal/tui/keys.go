@@ -160,25 +160,34 @@ var matchListKeys = matchListKeyMap{
 // can't share exportDoneKeyMap's "enter also means back" binding. ---
 
 type matchDoneKeyMap struct {
-	Up, Down, Edit, Lidarr, LidarrAll, Back, Help key.Binding
+	Up, Down, Edit, Lidarr, LidarrAll                               key.Binding
+	FilterISRC, FilterFuzzy, FilterManual, FilterMissing, FilterAll key.Binding
+	FilterHelp                                                      key.Binding // display-only: 1-4/0 combined, for the help bar
+	Back, Help                                                      key.Binding
 }
 
 func (k matchDoneKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Edit, k.Lidarr, k.LidarrAll, k.Back, k.Help}
+	return []key.Binding{k.Edit, k.FilterHelp, k.Lidarr, k.LidarrAll, k.Back, k.Help}
 }
 
 func (k matchDoneKeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{k.Up, k.Down}, {k.Edit}, {k.Lidarr, k.LidarrAll}, {k.Back, k.Help}}
+	return [][]key.Binding{{k.Up, k.Down}, {k.Edit}, {k.FilterHelp}, {k.Lidarr, k.LidarrAll}, {k.Back, k.Help}}
 }
 
 var matchDoneKeys = matchDoneKeyMap{
-	Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-	Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-	Edit:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "fix match")),
-	Lidarr:    key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "add album to Lidarr")),
-	LidarrAll: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "add all missing to Lidarr")),
-	Back:      key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back to menu")),
-	Help:      globalKeys.Help,
+	Up:            key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:          key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Edit:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "fix match")),
+	Lidarr:        key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "add album to Lidarr")),
+	LidarrAll:     key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "add all missing to Lidarr")),
+	FilterISRC:    key.NewBinding(key.WithKeys("1")),
+	FilterFuzzy:   key.NewBinding(key.WithKeys("2")),
+	FilterManual:  key.NewBinding(key.WithKeys("3")),
+	FilterMissing: key.NewBinding(key.WithKeys("4")),
+	FilterAll:     key.NewBinding(key.WithKeys("0")),
+	FilterHelp:    key.NewBinding(key.WithKeys("1", "2", "3", "4", "0"), key.WithHelp("1-4/0", "toggle isrc/fuzzy/manual/missing, 0=all")),
+	Back:          key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back to menu")),
+	Help:          globalKeys.Help,
 }
 
 // --- Match: Lidarr overlay (picking an album / confirming a bulk add) ---

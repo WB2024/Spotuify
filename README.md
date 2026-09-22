@@ -146,6 +146,12 @@ table also responds to the mouse wheel, in addition to the keyboard.
   just the first screenful) and a side panel shows full detail — artist,
   album, playlist, method, and the complete local path — for whichever row
   is selected.
+- `1`/`2`/`3`/`4` — toggle the results table down to just `isrc`/`fuzzy`/
+  `manual`/`missing` tracks, any combination at once (e.g. `2`+`4` to
+  inspect every fuzzy and missing match together while hiding the clean
+  `isrc` hits) — each is its own on/off switch, not a single-choice cycle,
+  shown as a chip per method (with its total count, unaffected by the
+  filter) above the table; `0` clears back to showing everything.
 - `enter` on any row — matched, fuzzy, manual, or missing — opens a file
   picker scoped to your Navidrome music folder so you can browse to and pick
   the correct file yourself. Selecting one immediately rewrites that

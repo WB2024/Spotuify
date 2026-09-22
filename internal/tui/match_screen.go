@@ -75,6 +75,39 @@ func (f matchStatusFilter) label() string {
 	}
 }
 
+// matchMethodFilter narrows the Done-screen results table to a chosen
+// subset of match methods — e.g. fuzzy+missing together, to inspect every
+// track that isn't a clean isrc hit — by toggling each category
+// independently rather than cycling through fixed presets like
+// matchStatusFilter does. Default (filterAllMethods) shows everything.
+type matchMethodFilter uint8
+
+const (
+	filterISRC matchMethodFilter = 1 << iota
+	filterFuzzy
+	filterManual
+	filterMissing
+
+	filterAllMethods = filterISRC | filterFuzzy | filterManual | filterMissing
+)
+
+func (f matchMethodFilter) has(bit matchMethodFilter) bool                  { return f&bit != 0 }
+func (f matchMethodFilter) toggled(bit matchMethodFilter) matchMethodFilter { return f ^ bit }
+
+// methodBit maps a match.Method to its matchMethodFilter bit.
+func methodBit(method match.Method) matchMethodFilter {
+	switch method {
+	case match.MethodISRC:
+		return filterISRC
+	case match.MethodFuzzy:
+		return filterFuzzy
+	case match.MethodManual:
+		return filterManual
+	default:
+		return filterMissing
+	}
+}
+
 // audioExtensions gates which files the manual-match file picker lets the
 // user select — broad enough to cover this library without needing a
 // filesystem scan to determine what's audio. Anything else (and every
@@ -160,9 +193,17 @@ type MatchModel struct {
 	matchEvents   chan matchEvent
 	currentStatus string
 	runs          []*playlistRun
-	trackRefs     []trackRef
 	queueLen      int
 	queueDone     int
+
+	// allTrackRefs is every matched track in this batch, independent of
+	// methodFilter; trackRefs is the currently-visible (filtered) subset
+	// actually shown in the table — every row-index-based lookup
+	// (m.tbl.Cursor() into m.trackRefs, methodAtRow, resultAt, ...) reads
+	// trackRefs, so filtering only ever affects what's on screen.
+	allTrackRefs []trackRef
+	trackRefs    []trackRef
+	methodFilter matchMethodFilter
 
 	// Manual-match file picker overlay, active only in matchStateDone.
 	editingFile bool
@@ -207,7 +248,7 @@ func newMatchModel(cfg *config.Config) MatchModel {
 	gi.PromptStyle = accentStyle
 	gi.Cursor.Style = accentStyle
 
-	return MatchModel{cfg: cfg, spin: sp, list: l, prog: pg, tbl: tbl, playlistGroups: groups, groupInput: gi}
+	return MatchModel{cfg: cfg, spin: sp, list: l, prog: pg, tbl: tbl, playlistGroups: groups, groupInput: gi, methodFilter: filterAllMethods}
 }
 
 // newLibraryFilePicker builds a fresh, library-scoped file picker rooted at
@@ -641,6 +682,26 @@ func (m MatchModel) handleKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction)
 			return m.beginLidarr()
 		case key.Matches(msg, matchDoneKeys.LidarrAll):
 			return m.beginLidarrBulk()
+		case key.Matches(msg, matchDoneKeys.FilterISRC):
+			m.methodFilter = m.methodFilter.toggled(filterISRC)
+			m.applyMethodFilter()
+			return m, nil, matchActionNone
+		case key.Matches(msg, matchDoneKeys.FilterFuzzy):
+			m.methodFilter = m.methodFilter.toggled(filterFuzzy)
+			m.applyMethodFilter()
+			return m, nil, matchActionNone
+		case key.Matches(msg, matchDoneKeys.FilterManual):
+			m.methodFilter = m.methodFilter.toggled(filterManual)
+			m.applyMethodFilter()
+			return m, nil, matchActionNone
+		case key.Matches(msg, matchDoneKeys.FilterMissing):
+			m.methodFilter = m.methodFilter.toggled(filterMissing)
+			m.applyMethodFilter()
+			return m, nil, matchActionNone
+		case key.Matches(msg, matchDoneKeys.FilterAll):
+			m.methodFilter = filterAllMethods
+			m.applyMethodFilter()
+			return m, nil, matchActionNone
 		}
 		var cmd tea.Cmd
 		m.tbl, cmd = m.tbl.Update(msg)
@@ -880,7 +941,9 @@ func (m MatchModel) startMatching() (MatchModel, tea.Cmd, matchAction) {
 	}
 
 	m.runs = nil
+	m.allTrackRefs = nil
 	m.trackRefs = nil
+	m.methodFilter = filterAllMethods
 	m.lidarrNotes = nil
 	m.currentStatus = ""
 	m.queueLen = len(queue)
@@ -920,9 +983,9 @@ func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchA
 			if r.Item.Track == nil {
 				continue
 			}
-			m.trackRefs = append(m.trackRefs, trackRef{runIdx: runIdx, resultIdx: i})
+			m.allTrackRefs = append(m.allTrackRefs, trackRef{runIdx: runIdx, resultIdx: i})
 		}
-		m.tbl.SetRows(m.tableRows())
+		m.applyMethodFilter()
 		m.tbl.GotoBottom()
 
 		pct := float64(m.queueDone) / float64(m.queueLen)
@@ -937,6 +1000,32 @@ func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchA
 		return m, nil, matchActionNone
 	}
 	return m, nil, matchActionNone
+}
+
+// applyMethodFilter rebuilds trackRefs — the table's visible rows — from
+// allTrackRefs according to methodFilter, and feeds the result to the
+// table. table.SetRows re-clamps the cursor on its own if the row count
+// shrank past it, but only downward — if a filter toggle passes through
+// zero visible rows (e.g. missing-only, then toggling missing off before
+// toggling fuzzy on), the cursor goes to -1 and SetRows never brings it
+// back even once rows exist again, leaving nothing selected. Fix that up
+// explicitly.
+func (m *MatchModel) applyMethodFilter() {
+	if m.methodFilter == filterAllMethods {
+		m.trackRefs = m.allTrackRefs
+	} else {
+		m.trackRefs = make([]trackRef, 0, len(m.allTrackRefs))
+		for _, ref := range m.allTrackRefs {
+			method := m.runs[ref.runIdx].results[ref.resultIdx].Method
+			if m.methodFilter.has(methodBit(method)) {
+				m.trackRefs = append(m.trackRefs, ref)
+			}
+		}
+	}
+	m.tbl.SetRows(m.tableRows())
+	if len(m.trackRefs) > 0 && m.tbl.Cursor() < 0 {
+		m.tbl.SetCursor(0)
+	}
 }
 
 // methodAtRow returns the match method for the given results-table row
@@ -1023,25 +1112,7 @@ func (m MatchModel) View() string {
 		if m.editingFile {
 			return m.viewFilePicker()
 		}
-		isrcN, fuzzyN, manualN, missN := 0, 0, 0, 0
-		for _, ref := range m.trackRefs {
-			switch m.runs[ref.runIdx].results[ref.resultIdx].Method {
-			case match.MethodISRC:
-				isrcN++
-			case match.MethodFuzzy:
-				fuzzyN++
-			case match.MethodManual:
-				manualN++
-			default:
-				missN++
-			}
-		}
-		summary := fmt.Sprintf("Done — %s  %s  %s  %s",
-			badgeDone.Render(fmt.Sprintf("%d isrc", isrcN)),
-			warnStyle.Render(fmt.Sprintf("%d fuzzy", fuzzyN)),
-			accentStyle.Render(fmt.Sprintf("%d manual", manualN)),
-			badgeFailed.Render(fmt.Sprintf("%d missing", missN)))
-		return m.viewDone(summary)
+		return m.viewDone()
 
 	case matchStateFatal:
 		return errorStyle.Render("Error: "+m.err.Error()) + "\n"
@@ -1067,9 +1138,9 @@ func (m MatchModel) viewBatch(heading string) string {
 // the currently selected track (full artist/album/path — the table itself
 // only has room for a trimmed filename) and, below both, each playlist's
 // write outcome.
-func (m MatchModel) viewDone(heading string) string {
+func (m MatchModel) viewDone() string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render(heading) + "\n\n")
+	b.WriteString(headerStyle.Render("Done") + "  " + m.renderMethodChips() + "\n\n")
 
 	tableW := (m.width * 3) / 5
 	detailW := m.width - tableW - 3
@@ -1228,6 +1299,46 @@ func (m MatchModel) renderStatusChips() string {
 		chip("Has file", hasFile, m.statusFilter == matchFilterHasFile) + " " +
 		chip("Missing", missing, m.statusFilter == matchFilterMissing) + "   " +
 		fadedStyle.Render("m to cycle")
+}
+
+// renderMethodChips is the results table's method filter: one toggle chip
+// per match method, numbered to match the keys that flip them (1-4), with
+// a live count of each (against allTrackRefs, so the counts don't change
+// as the filter narrows the table down) and the active ones highlighted in
+// their method's own color. Several can be on at once — e.g. 2+4 to
+// inspect every fuzzy and missing track together — unlike the single-choice
+// playlist-list filter above.
+func (m MatchModel) renderMethodChips() string {
+	var isrcN, fuzzyN, manualN, missN int
+	for _, ref := range m.allTrackRefs {
+		switch m.runs[ref.runIdx].results[ref.resultIdx].Method {
+		case match.MethodISRC:
+			isrcN++
+		case match.MethodFuzzy:
+			fuzzyN++
+		case match.MethodManual:
+			manualN++
+		default:
+			missN++
+		}
+	}
+
+	chip := func(key, label string, count int, active bool, bg lipgloss.TerminalColor) string {
+		text := fmt.Sprintf(" %s %s (%d) ", key, label, count)
+		if active {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(bg).Bold(true).Render(text)
+		}
+		return fadedStyle.Render(text)
+	}
+
+	row := chip("1", "isrc", isrcN, m.methodFilter.has(filterISRC), spotifyGreen) + " " +
+		chip("2", "fuzzy", fuzzyN, m.methodFilter.has(filterFuzzy), warnAmber) + " " +
+		chip("3", "manual", manualN, m.methodFilter.has(filterManual), accent) + " " +
+		chip("4", "missing", missN, m.methodFilter.has(filterMissing), errorRed)
+	if m.methodFilter != filterAllMethods {
+		row += "   " + fadedStyle.Render("0 show all")
+	}
+	return row
 }
 
 func (m MatchModel) renderDetail(width int) string {

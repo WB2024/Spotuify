@@ -228,8 +228,12 @@ func (m MatchModel) beginLidarrBulk() (MatchModel, tea.Cmd, matchAction) {
 		m.editErr = err.Error()
 		return m, nil, matchActionNone
 	}
+	// Scoped to every missing track in the batch, not just whatever the
+	// results table's method filter currently narrows the view down to —
+	// that filter is for inspecting the list, not for limiting what a bulk
+	// action operates on.
 	var refs []trackRef
-	for _, ref := range m.trackRefs {
+	for _, ref := range m.allTrackRefs {
 		r := m.runs[ref.runIdx].results[ref.resultIdx]
 		if r.Method == match.MethodNone && r.Item.Track != nil {
 			refs = append(refs, ref)
