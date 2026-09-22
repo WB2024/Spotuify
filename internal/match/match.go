@@ -70,6 +70,16 @@ type Options struct {
 
 	EnableFuzzy    bool
 	FuzzyThreshold float64
+
+	// ManualOverrides is a Spotify track ID -> local file path table
+	// (config.ManualMatches.Snapshot()) checked before every other tier —
+	// a previous manual correction always wins over whatever automatic
+	// matching would find this run, so re-matching a playlist later (to
+	// pick up newly-added local files, say) doesn't silently recompute a
+	// deliberate correction back to "missing". An override whose file no
+	// longer exists in idx is skipped, falling through to normal matching,
+	// rather than pointing the .m3u8 at a file that's gone.
+	ManualOverrides map[string]string
 }
 
 // DefaultOptions returns sane defaults: fuzzy matching on, requiring a
@@ -98,6 +108,15 @@ func All(ctx context.Context, items []spotifyapi.PlaylistTrackItem, idx *library
 		if item.Track == nil || item.IsLocal {
 			continue
 		}
+
+		if path, ok := opts.ManualOverrides[item.Track.ID]; ok && !used[path] {
+			if _, found := idx.ByPath(path); found {
+				results[i] = Result{Item: item, Method: MethodManual, LocalPath: path, Confidence: 1}
+				used[path] = true
+				continue
+			}
+		}
+
 		isrc := item.Track.ExternalIDs.ISRC
 		if isrc == "" {
 			continue

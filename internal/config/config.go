@@ -62,6 +62,13 @@ type Config struct {
 	// Spotify playlist ID. See PlaylistGroups.
 	PlaylistGroupsPath string
 
+	// ManualMatchesPath is where manual match corrections (set from the
+	// match results screen with "enter") are persisted, keyed by Spotify
+	// track ID, so a corrected track stays corrected the next time that
+	// playlist is matched instead of being silently recomputed back to
+	// whatever automatic matching finds (or doesn't). See ManualMatches.
+	ManualMatchesPath string
+
 	// NavidromeAPIURL, NavidromeUsername, and NavidromePassword authenticate
 	// against Navidrome's own REST API (distinct from the read-only database
 	// access above) — used only to upload a playlist's cover art, since
@@ -209,6 +216,7 @@ func Load() (*Config, error) {
 	tokenPath := filepath.Join(cacheDir, "spotuify", "token.json")
 	libraryCachePath := filepath.Join(cacheDir, "spotuify", "mb_isrc_cache.json")
 	playlistGroupsPath := filepath.Join(cacheDir, "spotuify", "playlist_groups.json")
+	manualMatchesPath := filepath.Join(cacheDir, "spotuify", "manual_matches.json")
 
 	return &Config{
 		ClientID:                os.Getenv(envClientID),
@@ -221,6 +229,7 @@ func Load() (*Config, error) {
 		M3U8Dir:                 m3u8Dir,
 		NavidromeGroup:          navidromeGroup,
 		PlaylistGroupsPath:      playlistGroupsPath,
+		ManualMatchesPath:       manualMatchesPath,
 		ResolveMusicBrainzISRC:  resolveMBISRC,
 		EnableFuzzyMatching:     enableFuzzy,
 		NavidromeAPIURL:         os.Getenv(envNavidromeAPIURL),

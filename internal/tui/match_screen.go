@@ -161,6 +161,13 @@ type MatchModel struct {
 	// playlist list.
 	playlistGroups *config.PlaylistGroups
 
+	// manualMatches holds manual match corrections (see
+	// config.ManualMatches), loaded once at startup, applied at the start
+	// of every match run (ahead of automatic matching — see
+	// match.Options.ManualOverrides), and updated whenever the user fixes
+	// a match from the results screen.
+	manualMatches *config.ManualMatches
+
 	state matchScreenState
 
 	spin spinner.Model
@@ -239,7 +246,8 @@ func newMatchModel(cfg *config.Config) MatchModel {
 	tbl := table.New(table.WithFocused(true))
 	tbl.SetStyles(tableStyles())
 
-	groups, _ := config.LoadPlaylistGroups(cfg.PlaylistGroupsPath) // usable even on error, see LoadPlaylistGroups
+	groups, _ := config.LoadPlaylistGroups(cfg.PlaylistGroupsPath)      // usable even on error, see LoadPlaylistGroups
+	manualMatches, _ := config.LoadManualMatches(cfg.ManualMatchesPath) // same
 
 	gi := textinput.New()
 	gi.Placeholder = cfg.NavidromeGroup
@@ -248,7 +256,7 @@ func newMatchModel(cfg *config.Config) MatchModel {
 	gi.PromptStyle = accentStyle
 	gi.Cursor.Style = accentStyle
 
-	return MatchModel{cfg: cfg, spin: sp, list: l, prog: pg, tbl: tbl, playlistGroups: groups, groupInput: gi, methodFilter: filterAllMethods}
+	return MatchModel{cfg: cfg, spin: sp, list: l, prog: pg, tbl: tbl, playlistGroups: groups, manualMatches: manualMatches, groupInput: gi, methodFilter: filterAllMethods}
 }
 
 // newLibraryFilePicker builds a fresh, library-scoped file picker rooted at
@@ -763,7 +771,10 @@ func (m MatchModel) handleFilePickerKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, ma
 
 // applyManualMatch records the user's chosen file as the track's match,
 // persists it immediately (rewriting just that playlist's .m3u8 and
-// missing.txt — no network, no cover re-download), and closes the overlay.
+// missing.txt — no network, no cover re-download) and separately (keyed by
+// Spotify track ID, in manualMatches) so the correction survives a later
+// from-scratch re-match instead of being silently recomputed away, and
+// closes the overlay.
 func (m MatchModel) applyManualMatch(path string) (MatchModel, tea.Cmd, matchAction) {
 	m.editingFile = false
 	m.editErr = ""
@@ -773,6 +784,12 @@ func (m MatchModel) applyManualMatch(path string) (MatchModel, tea.Cmd, matchAct
 	r.Method = match.MethodManual
 	r.LocalPath = path
 	r.Confidence = 1
+
+	if r.Item.Track != nil {
+		if err := m.manualMatches.Set(r.Item.Track.ID, path); err != nil {
+			m.editErr = "remembering this match for next time: " + err.Error()
+		}
+	}
 
 	group := resolveGroup(m.cfg, m.playlistGroups, run.playlist.ID)
 	if res, err := m3u8.Rewrite(m.cfg.M3U8Dir, run.playlist, run.results, group); err != nil {
@@ -954,7 +971,7 @@ func (m MatchModel) startMatching() (MatchModel, tea.Cmd, matchAction) {
 
 	ch := make(chan matchEvent)
 	m.matchEvents = ch
-	go runMatch(m.ctx, m.client, m.httpClient, m.library, m.cfg, m.playlistGroups, queue, ch)
+	go runMatch(m.ctx, m.client, m.httpClient, m.library, m.cfg, m.playlistGroups, m.manualMatches, queue, ch)
 
 	return m, tea.Batch(waitForMatchEvent(ch), m.prog.SetPercent(0)), matchActionNone
 }

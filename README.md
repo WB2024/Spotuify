@@ -157,7 +157,15 @@ table also responds to the mouse wheel, in addition to the keyboard.
   the correct file yourself. Selecting one immediately rewrites that
   playlist's `.m3u8` (and drops `missing.txt` if nothing's missing anymore);
   no need to re-run the match. `esc` backs up a folder, or cancels the edit
-  entirely once you're back at the music folder's root.
+  entirely once you're back at the music folder's root. The correction is
+  remembered (`~/.cache/spotuify/manual_matches.json`, keyed by Spotify
+  track ID) and takes priority over automatic matching on every future
+  match run for that track — re-matching the playlist later, e.g. to pick
+  up newly-added local files elsewhere, won't silently recompute a
+  deliberate fix back to missing. If the picked file is later moved,
+  renamed, or deleted, the next run notices it's gone and falls back to
+  normal automatic matching for that track instead of pointing the `.m3u8`
+  at a dead path.
 - `l` on any row — add the album that track belongs to in Lidarr (see
   "Adding missing albums to Lidarr" below): you're shown the candidate
   albums Lidarr's catalogue has for it, with whether each is already in
@@ -437,6 +445,9 @@ directly: re-ran the same playlist through Spotuify three times across
 different points in this build, and the database shows exactly one
 `playlist` row for it throughout, with `playlist_tracks` always matching
 the current track count exactly (no leftover rows from earlier runs).
+Every track is recomputed from scratch on each run, *except* any you've
+manually corrected from the results screen — those are remembered
+separately (see above) specifically so a re-match doesn't undo them.
 
 The one real edge case: since the path is derived from the *name* alone,
 two genuinely different Spotify playlists that happen to share an

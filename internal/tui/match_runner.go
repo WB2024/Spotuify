@@ -40,10 +40,14 @@ type matchEvent struct {
 // them against idx, writes the .m3u8 (+ missing report + cover art), and
 // reports progress over ch. It's run in its own goroutine; ch is closed
 // when done.
-func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.Client, idx *library.Index, cfg *config.Config, groups *config.PlaylistGroups, queue []spotifyapi.SimplifiedPlaylist, ch chan<- matchEvent) {
+func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.Client, idx *library.Index, cfg *config.Config, groups *config.PlaylistGroups, manualMatches *config.ManualMatches, queue []spotifyapi.SimplifiedPlaylist, ch chan<- matchEvent) {
 	defer close(ch)
 
-	opts := match.Options{EnableFuzzy: cfg.EnableFuzzyMatching, FuzzyThreshold: match.DefaultOptions().FuzzyThreshold}
+	opts := match.Options{
+		EnableFuzzy:     cfg.EnableFuzzyMatching,
+		FuzzyThreshold:  match.DefaultOptions().FuzzyThreshold,
+		ManualOverrides: manualMatches.Snapshot(),
+	}
 	if cfg.ResolveMusicBrainzISRC {
 		resolver := library.NewMusicBrainzResolver(cfg.LibraryCachePath)
 		defer resolver.Close()
