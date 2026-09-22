@@ -170,6 +170,11 @@ type MatchModel struct {
 	editingRoot string
 	editErr     string
 	fp          filepicker.Model
+
+	// Lidarr overlay (see lidarr_overlay.go), active only in
+	// matchStateDone, and what it's done to each track this session.
+	lidarr      lidarrOverlay
+	lidarrNotes map[trackRef]string
 }
 
 func newMatchModel(cfg *config.Config) MatchModel {
@@ -401,6 +406,9 @@ func (m MatchModel) Keys() help.KeyMap {
 	case matchStateMatching, matchStateLoadingLibrary:
 		return exportRunKeys
 	case matchStateDone:
+		if m.lidarr.active() {
+			return m.lidarrHelpKeys()
+		}
 		if m.editingFile {
 			return matchEditKeys
 		}
@@ -460,8 +468,12 @@ func (m MatchModel) Update(msg tea.Msg) (MatchModel, tea.Cmd, matchAction) {
 		m.state = matchStateList
 		return m, nil, matchActionNone
 
+	case lidarrCandidatesMsg, lidarrAppliedMsg, lidarrBulkEvent:
+		m, cmd, _ := m.handleLidarrMsg(msg)
+		return m, cmd, matchActionNone
+
 	case spinner.TickMsg:
-		if m.state != matchStateAuthenticating && m.state != matchStateLoadingPlaylists && m.state != matchStateLoadingLibrary {
+		if m.state != matchStateAuthenticating && m.state != matchStateLoadingPlaylists && m.state != matchStateLoadingLibrary && !m.lidarr.busy() {
 			return m, nil, matchActionNone
 		}
 		var cmd tea.Cmd
@@ -506,6 +518,9 @@ func (m MatchModel) Update(msg tea.Msg) (MatchModel, tea.Cmd, matchAction) {
 		m.tbl, cmd = m.tbl.Update(msg)
 		return m, cmd, matchActionNone
 	case matchStateDone:
+		if m.lidarr.active() {
+			return m, nil, matchActionNone
+		}
 		if m.editingFile {
 			// Forwards everything, notably the file picker's own
 			// unexported readDirMsg it sends itself after Init()/opening a
@@ -596,6 +611,9 @@ func (m MatchModel) handleKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction)
 		return m, nil, matchActionNone
 
 	case matchStateDone:
+		if m.lidarr.active() {
+			return m.handleLidarrKey(msg)
+		}
 		if m.editingFile {
 			return m.handleFilePickerKey(msg)
 		}
@@ -604,6 +622,10 @@ func (m MatchModel) handleKey(msg tea.KeyMsg) (MatchModel, tea.Cmd, matchAction)
 			return m, nil, matchActionBack
 		case key.Matches(msg, matchDoneKeys.Edit):
 			return m.beginEdit()
+		case key.Matches(msg, matchDoneKeys.Lidarr):
+			return m.beginLidarr()
+		case key.Matches(msg, matchDoneKeys.LidarrAll):
+			return m.beginLidarrBulk()
 		}
 		var cmd tea.Cmd
 		m.tbl, cmd = m.tbl.Update(msg)
@@ -844,6 +866,7 @@ func (m MatchModel) startMatching() (MatchModel, tea.Cmd, matchAction) {
 
 	m.runs = nil
 	m.trackRefs = nil
+	m.lidarrNotes = nil
 	m.currentStatus = ""
 	m.queueLen = len(queue)
 	m.queueDone = 0
@@ -979,6 +1002,9 @@ func (m MatchModel) View() string {
 		return m.viewBatch(fmt.Sprintf("Matching %d/%d playlists...", m.queueDone, m.queueLen))
 
 	case matchStateDone:
+		if m.lidarr.active() {
+			return m.viewLidarr()
+		}
 		if m.editingFile {
 			return m.viewFilePicker()
 		}
@@ -1084,7 +1110,12 @@ func (m MatchModel) renderTrackDetail(width int) string {
 		b.WriteString(fadedStyle.Render("(not matched)") + "\n")
 	}
 
-	b.WriteString("\n" + fadedStyle.Render("enter to fix this match"))
+	if note, ok := m.lidarrNotes[m.trackRefs[m.tbl.Cursor()]]; ok {
+		b.WriteString("\n" + dimStyle.Render("Lidarr") + "\n")
+		b.WriteString(accentStyle.Width(width).Render(note) + "\n")
+	}
+
+	b.WriteString("\n" + fadedStyle.Render("enter to fix this match · l add album to Lidarr"))
 	return b.String()
 }
 

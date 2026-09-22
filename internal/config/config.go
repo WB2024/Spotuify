@@ -74,6 +74,27 @@ type Config struct {
 	NavidromeUsername string
 	NavidromePassword string
 
+	// LidarrURL and LidarrAPIKey authenticate against a Lidarr server's API
+	// (X-Api-Key header), used to add the album a playlist track belongs to
+	// — typically a track that couldn't be matched locally — so Lidarr can
+	// go and get it. Left blank, the Lidarr actions on the match results
+	// screen are unavailable.
+	LidarrURL    string
+	LidarrAPIKey string
+
+	// LidarrRootFolder, LidarrQualityProfileID, and LidarrMetadataProfileID
+	// are what Lidarr requires to add an artist it doesn't have yet. Picked
+	// in Settings from the lists Lidarr itself reports.
+	LidarrRootFolder        string
+	LidarrQualityProfileID  int
+	LidarrMetadataProfileID int
+
+	// LidarrAddAndSearch is the default for what happens after an album is
+	// added/monitored in Lidarr: true also kicks off Lidarr's search for it
+	// right away, false just leaves it monitored for Lidarr to pick up on
+	// its own schedule. Overridable per action from the results screen.
+	LidarrAddAndSearch bool
+
 	// ResolveMusicBrainzISRC controls whether, during matching, a Spotify
 	// track that didn't already match by tag gets bridged via the
 	// MusicBrainz API (looking up which recording(s) its ISRC belongs to,
@@ -120,6 +141,12 @@ const (
 	envNavidromeAPIURL  = "SPOTUIFY_NAVIDROME_API_URL"
 	envNavidromeAPIUser = "SPOTUIFY_NAVIDROME_API_USERNAME"
 	envNavidromeAPIPass = "SPOTUIFY_NAVIDROME_API_PASSWORD"
+	envLidarrURL        = "SPOTUIFY_LIDARR_URL"
+	envLidarrAPIKey     = "SPOTUIFY_LIDARR_API_KEY"
+	envLidarrRootFolder = "SPOTUIFY_LIDARR_ROOT_FOLDER"
+	envLidarrQualityID  = "SPOTUIFY_LIDARR_QUALITY_PROFILE_ID"
+	envLidarrMetadataID = "SPOTUIFY_LIDARR_METADATA_PROFILE_ID"
+	envLidarrAddSearch  = "SPOTUIFY_LIDARR_ADD_AND_SEARCH"
 )
 
 const defaultRedirectPort = 8080
@@ -166,6 +193,10 @@ func Load() (*Config, error) {
 		navidromeGroup = defaultNavidromeGroup
 	}
 
+	lidarrQualityID, _ := strconv.Atoi(os.Getenv(envLidarrQualityID))
+	lidarrMetadataID, _ := strconv.Atoi(os.Getenv(envLidarrMetadataID))
+	lidarrAddSearch := parseBoolDefault(os.Getenv(envLidarrAddSearch), false)
+
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		cacheDir = "."
@@ -175,24 +206,30 @@ func Load() (*Config, error) {
 	playlistGroupsPath := filepath.Join(cacheDir, "spotuify", "playlist_groups.json")
 
 	return &Config{
-		ClientID:               os.Getenv(envClientID),
-		ClientSecret:           os.Getenv(envClientSecret),
-		RedirectPort:           port,
-		ExportDir:              exportDir,
-		DownloadCovers:         downloadCovers,
-		NavidromeDBPath:        os.Getenv(envNavidromeDB),
-		NavidromeMusicPath:     os.Getenv(envNavidromeMusic),
-		M3U8Dir:                m3u8Dir,
-		NavidromeGroup:         navidromeGroup,
-		PlaylistGroupsPath:     playlistGroupsPath,
-		ResolveMusicBrainzISRC: resolveMBISRC,
-		EnableFuzzyMatching:    enableFuzzy,
-		NavidromeAPIURL:        os.Getenv(envNavidromeAPIURL),
-		NavidromeUsername:      os.Getenv(envNavidromeAPIUser),
-		NavidromePassword:      os.Getenv(envNavidromeAPIPass),
-		TokenCachePath:         tokenPath,
-		LibraryCachePath:       libraryCachePath,
-		EnvPath:                envPath,
+		ClientID:                os.Getenv(envClientID),
+		ClientSecret:            os.Getenv(envClientSecret),
+		RedirectPort:            port,
+		ExportDir:               exportDir,
+		DownloadCovers:          downloadCovers,
+		NavidromeDBPath:         os.Getenv(envNavidromeDB),
+		NavidromeMusicPath:      os.Getenv(envNavidromeMusic),
+		M3U8Dir:                 m3u8Dir,
+		NavidromeGroup:          navidromeGroup,
+		PlaylistGroupsPath:      playlistGroupsPath,
+		ResolveMusicBrainzISRC:  resolveMBISRC,
+		EnableFuzzyMatching:     enableFuzzy,
+		NavidromeAPIURL:         os.Getenv(envNavidromeAPIURL),
+		NavidromeUsername:       os.Getenv(envNavidromeAPIUser),
+		NavidromePassword:       os.Getenv(envNavidromeAPIPass),
+		LidarrURL:               strings.TrimRight(os.Getenv(envLidarrURL), "/"),
+		LidarrAPIKey:            os.Getenv(envLidarrAPIKey),
+		LidarrRootFolder:        os.Getenv(envLidarrRootFolder),
+		LidarrQualityProfileID:  lidarrQualityID,
+		LidarrMetadataProfileID: lidarrMetadataID,
+		LidarrAddAndSearch:      lidarrAddSearch,
+		TokenCachePath:          tokenPath,
+		LibraryCachePath:        libraryCachePath,
+		EnvPath:                 envPath,
 	}, nil
 }
 
@@ -245,6 +282,24 @@ func (c *Config) HasNavidromeAPI() bool {
 	return c.NavidromeAPIURL != "" && c.NavidromeUsername != "" && c.NavidromePassword != ""
 }
 
+// HasLidarr reports whether a Lidarr server is configured well enough to
+// talk to (URL + API key). Adding an artist Lidarr doesn't have yet also
+// needs LidarrRootFolder and the two profile IDs — see ValidateLidarr.
+func (c *Config) HasLidarr() bool {
+	return c.LidarrURL != "" && c.LidarrAPIKey != ""
+}
+
+// ValidateLidarr reports whether everything needed to add to Lidarr is set.
+func (c *Config) ValidateLidarr() error {
+	if !c.HasLidarr() {
+		return fmt.Errorf("Lidarr isn't configured — open Settings and set its URL and API key")
+	}
+	if c.LidarrRootFolder == "" || c.LidarrQualityProfileID == 0 || c.LidarrMetadataProfileID == 0 {
+		return fmt.Errorf("Lidarr root folder / quality profile / metadata profile aren't set — pick them in Settings")
+	}
+	return nil
+}
+
 // RedirectURI is the loopback URI Spotify redirects the user's browser back
 // to after they approve the app. Spotify requires this to match, byte for
 // byte, an entry registered in the app's dashboard settings, and (per
@@ -273,6 +328,12 @@ func (c *Config) Save() error {
 		{envNavidromeAPIURL, c.NavidromeAPIURL},
 		{envNavidromeAPIUser, c.NavidromeUsername},
 		{envNavidromeAPIPass, c.NavidromePassword},
+		{envLidarrURL, c.LidarrURL},
+		{envLidarrAPIKey, c.LidarrAPIKey},
+		{envLidarrRootFolder, c.LidarrRootFolder},
+		{envLidarrQualityID, strconv.Itoa(c.LidarrQualityProfileID)},
+		{envLidarrMetadataID, strconv.Itoa(c.LidarrMetadataProfileID)},
+		{envLidarrAddSearch, strconv.FormatBool(c.LidarrAddAndSearch)},
 	}
 	return upsertEnvFile(c.EnvPath, values)
 }

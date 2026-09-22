@@ -57,6 +57,12 @@ func stripBracketed(s string, open, close byte) string {
 	}
 }
 
+// Similarity returns a 0..1 score for how alike two strings are after
+// normalization — the same comparison the fuzzy matcher uses, exported for
+// other places that need to compare a Spotify name against a catalogue's
+// (e.g. picking which MusicBrainz release group a Spotify album is).
+func Similarity(a, b string) float64 { return similarity(a, b) }
+
 // similarity returns a 0..1 score for how alike two strings are, based on
 // normalized Levenshtein edit distance.
 func similarity(a, b string) float64 {

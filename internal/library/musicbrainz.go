@@ -41,14 +41,91 @@ type mbISRCResponse struct {
 // an ISRC. An ISRC MusicBrainz has never seen returns (nil, nil) — a
 // normal, non-error outcome, not every ISRC is in their database.
 func (c *musicbrainzClient) RecordingsForISRC(ctx context.Context, isrc string) ([]string, error) {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, err
+	endpoint := fmt.Sprintf("https://musicbrainz.org/ws/2/isrc/%s?fmt=json", url.PathEscape(isrc))
+
+	var out mbISRCResponse
+	found, err := c.getJSON(ctx, endpoint, &out)
+	if err != nil {
+		return nil, fmt.Errorf("isrc %s: %w", isrc, err)
+	}
+	if !found {
+		return nil, nil // ISRC not in MusicBrainz — not a hard error
 	}
 
-	endpoint := fmt.Sprintf("https://musicbrainz.org/ws/2/isrc/%s?fmt=json", url.PathEscape(isrc))
+	ids := make([]string, len(out.Recordings))
+	for i, r := range out.Recordings {
+		ids[i] = r.ID
+	}
+	return ids, nil
+}
+
+// ReleaseGroup is a MusicBrainz release group — the "album" as a work,
+// independent of any particular pressing/edition — which is also exactly
+// what Lidarr keys its albums by (its foreignAlbumId).
+type ReleaseGroup struct {
+	ID               string   `json:"id"`
+	Title            string   `json:"title"`
+	PrimaryType      string   `json:"primary_type"`    // Album, Single, EP, ...
+	SecondaryTypes   []string `json:"secondary_types"` // Compilation, Soundtrack, Live, ...
+	FirstReleaseDate string   `json:"first_release_date"`
+}
+
+type mbRecordingResponse struct {
+	Releases []struct {
+		ReleaseGroup struct {
+			ID               string   `json:"id"`
+			Title            string   `json:"title"`
+			PrimaryType      string   `json:"primary-type"`
+			SecondaryTypes   []string `json:"secondary-types"`
+			FirstReleaseDate string   `json:"first-release-date"`
+		} `json:"release-group"`
+	} `json:"releases"`
+}
+
+// ReleaseGroupsForRecording returns every release group a recording
+// appears on (the album it's from, plus any singles, compilations, and
+// soundtracks that reused it), in MusicBrainz's order, deduplicated.
+func (c *musicbrainzClient) ReleaseGroupsForRecording(ctx context.Context, recordingID string) ([]ReleaseGroup, error) {
+	endpoint := fmt.Sprintf("https://musicbrainz.org/ws/2/recording/%s?fmt=json&inc=releases+release-groups", url.PathEscape(recordingID))
+
+	var out mbRecordingResponse
+	found, err := c.getJSON(ctx, endpoint, &out)
+	if err != nil {
+		return nil, fmt.Errorf("recording %s: %w", recordingID, err)
+	}
+	if !found {
+		return nil, nil
+	}
+
+	seen := make(map[string]bool, len(out.Releases))
+	var groups []ReleaseGroup
+	for _, rel := range out.Releases {
+		rg := rel.ReleaseGroup
+		if rg.ID == "" || seen[rg.ID] {
+			continue
+		}
+		seen[rg.ID] = true
+		groups = append(groups, ReleaseGroup{
+			ID:               rg.ID,
+			Title:            rg.Title,
+			PrimaryType:      rg.PrimaryType,
+			SecondaryTypes:   rg.SecondaryTypes,
+			FirstReleaseDate: rg.FirstReleaseDate,
+		})
+	}
+	return groups, nil
+}
+
+// getJSON performs one rate-limited MusicBrainz request. found is false on
+// a 404 (the entity isn't in MusicBrainz — a normal outcome, not an error).
+func (c *musicbrainzClient) getJSON(ctx context.Context, endpoint string, out any) (found bool, err error) {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return false, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	// MusicBrainz's API etiquette requires a descriptive User-Agent with a
 	// way to reach the app's maintainer; generic/absent UAs get throttled
@@ -58,25 +135,18 @@ func (c *musicbrainzClient) RecordingsForISRC(ctx context.Context, isrc string) 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil // ISRC not in MusicBrainz — not a hard error
+		return false, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("musicbrainz api returned %d for isrc %s", resp.StatusCode, isrc)
+		return false, fmt.Errorf("musicbrainz api returned %d", resp.StatusCode)
 	}
-
-	var out mbISRCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decoding musicbrainz response for %s: %w", isrc, err)
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return false, fmt.Errorf("decoding musicbrainz response: %w", err)
 	}
-
-	ids := make([]string, len(out.Recordings))
-	for i, r := range out.Recordings {
-		ids[i] = r.ID
-	}
-	return ids, nil
+	return true, nil
 }

@@ -15,12 +15,22 @@ type mbCacheEntry struct {
 	Resolved     bool     `json:"resolved"` // true once looked up, even if it came back empty
 }
 
+// mbRGEntry is what's cached for one recording: the release groups it
+// appears on (see ReleaseGroupsForRecording). Same reasoning as
+// mbCacheEntry — a recording's release groups only ever grow, slowly, and
+// the lookup is rate-limited.
+type mbRGEntry struct {
+	Groups   []ReleaseGroup `json:"groups"`
+	Resolved bool           `json:"resolved"`
+}
+
 type mbCache struct {
-	Entries map[string]mbCacheEntry `json:"entries"` // keyed by ISRC
+	Entries       map[string]mbCacheEntry `json:"entries"`                  // keyed by ISRC
+	ReleaseGroups map[string]mbRGEntry    `json:"release_groups,omitempty"` // keyed by recording ID
 }
 
 func loadMBCache(path string) mbCache {
-	empty := mbCache{Entries: map[string]mbCacheEntry{}}
+	empty := mbCache{Entries: map[string]mbCacheEntry{}, ReleaseGroups: map[string]mbRGEntry{}}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return empty
@@ -28,6 +38,9 @@ func loadMBCache(path string) mbCache {
 	var c mbCache
 	if err := json.Unmarshal(b, &c); err != nil || c.Entries == nil {
 		return empty
+	}
+	if c.ReleaseGroups == nil {
+		c.ReleaseGroups = map[string]mbRGEntry{}
 	}
 	return c
 }

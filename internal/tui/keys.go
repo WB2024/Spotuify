@@ -160,23 +160,53 @@ var matchListKeys = matchListKeyMap{
 // can't share exportDoneKeyMap's "enter also means back" binding. ---
 
 type matchDoneKeyMap struct {
-	Up, Down, Edit, Back, Help key.Binding
+	Up, Down, Edit, Lidarr, LidarrAll, Back, Help key.Binding
 }
 
 func (k matchDoneKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Edit, k.Back, k.Help}
+	return []key.Binding{k.Edit, k.Lidarr, k.LidarrAll, k.Back, k.Help}
 }
 
 func (k matchDoneKeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{k.Up, k.Down}, {k.Edit}, {k.Back, k.Help}}
+	return [][]key.Binding{{k.Up, k.Down}, {k.Edit}, {k.Lidarr, k.LidarrAll}, {k.Back, k.Help}}
 }
 
 var matchDoneKeys = matchDoneKeyMap{
-	Up:   key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-	Down: key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-	Edit: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "fix match")),
-	Back: key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back to menu")),
-	Help: globalKeys.Help,
+	Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Edit:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "fix match")),
+	Lidarr:    key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "add album to Lidarr")),
+	LidarrAll: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "add all missing to Lidarr")),
+	Back:      key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back to menu")),
+	Help:      globalKeys.Help,
+}
+
+// --- Match: Lidarr overlay (picking an album / confirming a bulk add) ---
+
+type lidarrKeyMap struct {
+	Up, Down, ToggleMode, Confirm, Cancel, Help key.Binding
+}
+
+func (k lidarrKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Confirm, k.ToggleMode, k.Cancel, k.Help}
+}
+
+func (k lidarrKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{{k.Up, k.Down}, {k.Confirm, k.ToggleMode}, {k.Cancel, k.Help}}
+}
+
+var lidarrKeys = lidarrKeyMap{
+	Up:         key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:       key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	ToggleMode: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "toggle add only / add + search")),
+	Confirm:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm")),
+	Cancel:     key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "cancel")),
+	Help:       globalKeys.Help,
+}
+
+// lidarrDoneKeys is the overlay's keymap once it's just showing a result.
+var lidarrDoneKeys = exportDoneKeyMap{
+	Continue: key.NewBinding(key.WithKeys("enter", "esc", "q"), key.WithHelp("enter", "close")),
 }
 
 // --- Match: file-picker overlay (correcting one track's match) ---

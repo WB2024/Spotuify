@@ -119,6 +119,14 @@ table also responds to the mouse wheel, in addition to the keyboard.
   playlist's `.m3u8` (and drops `missing.txt` if nothing's missing anymore);
   no need to re-run the match. `esc` backs up a folder, or cancels the edit
   entirely once you're back at the music folder's root.
+- `l` on any row — add the album that track belongs to in Lidarr (see
+  "Adding missing albums to Lidarr" below): you're shown the candidate
+  albums Lidarr's catalogue has for it, with whether each is already in
+  your library, and pick one. `s` flips between *Add only* and *Add +
+  search* for just that add; `esc` cancels.
+- `L` — the same for every missing track in the batch at once, one Lidarr
+  add per album, after a confirmation listing what it'll do. Anything it
+  can't identify confidently is reported rather than guessed at.
 
 **Settings:**
 - `↑`/`↓` — move between fields
@@ -133,10 +141,14 @@ Settings lets you set/change your Spotify Client ID and Secret, the export
 directory, the OAuth redirect port, whether cover art is downloaded, your
 Navidrome database path and music folder, the playlist output directory,
 the default Navidrome group (see below), the two matching toggles
-(MusicBrainz resolution, fuzzy matching), and optionally a Navidrome server
-URL/username/password for cover-art upload — all written back to `.env` on
-Save. Changing credentials or hitting "Log out" clears the cached session,
-so the next export/match re-triggers browser login.
+(MusicBrainz resolution, fuzzy matching), optionally a Navidrome server
+URL/username/password for cover-art upload, and optionally a Lidarr server
+URL/API key plus the root folder and quality/metadata profiles Lidarr needs
+(fetched from Lidarr itself: `enter` on one of those rows loads the choices,
+then cycles through them) and whether adds search immediately by default —
+all written back to `.env` on Save. Changing credentials or hitting "Log
+out" clears the cached session, so the next export/match re-triggers
+browser login.
 
 ## What gets exported
 
@@ -374,6 +386,62 @@ in its config) — on its normal schedule, or immediately if you trigger a
 scan manually from Navidrome's UI. Not something a normal re-match causes,
 only a one-off consequence of changing the output convention.
 
+### Adding missing albums to Lidarr
+
+A track that stays missing after matching is, by definition, one your
+library doesn't have — and if you run Lidarr, the natural next step is
+asking it to get the album. With a Lidarr URL and API key in Settings, the
+results screen can do that directly (`l` for one track, `L` for everything
+missing), without leaving the app or retyping album names into Lidarr.
+
+The tricky part is identifying *which* album. Spotify only gives an album
+name, and Lidarr's free-text lookup is loose — it matches artist and album
+names independently and happily ranks the artist's *other* releases first
+(searching "Warren G Regulate… G Funk Era" against a live Lidarr didn't
+surface the 1994 album in the top results at all). So the primary route
+goes through MusicBrainz instead, reusing the same rate-limited, cached
+client the matcher uses: the track's ISRC → its MusicBrainz recording(s)
+→ the release groups those recordings appear on → the one whose title
+matches the Spotify album (compilations and soundtracks that merely reuse
+the track are marked down, unless the Spotify album is itself a
+greatest-hits) → Lidarr's exact `lidarr:<release-group id>` lookup, which
+returns precisely that album, complete with whether it's already in your
+Lidarr library and monitored. Lidarr keys its albums by MusicBrainz
+release-group ID, so this lands on the right one even when text search
+buries it; free-text lookup is the fallback for tracks MusicBrainz doesn't
+know, and its results are labelled with a match percentage so you can tell
+a real hit from a guess.
+
+What "add" does depends on what Lidarr already has:
+
+- **Not in Lidarr at all** — added the way Lidarr's own *Add New* does for
+  a single album (`POST /api/v1/album`): if the artist is new they're
+  created in your chosen root folder with your chosen profiles, *monitored*
+  (Lidarr's RSS sync skips releases for unmonitored artists, so this
+  matters) but with "monitor new items" off and none of their other albums
+  monitored — so you get that one album, not the whole discography.
+  Verified against Lidarr's source: sending the artist with
+  `addOptions.monitor: none`, the obvious-looking way to express that,
+  actually forces the artist *unmonitored* in `AddArtistService`, which
+  would make "add only" silently never download anything.
+- **In Lidarr but unmonitored** — flipped to monitored.
+- **Already monitored** — nothing to change.
+
+Then, in *Add + search* mode, Lidarr's search for that album is queued
+immediately (`AlbumSearch` command); in *Add only* mode it's left for
+Lidarr's own RSS/schedule to pick up. The default is set in Settings and
+overridden per add with `s` — the point being you can queue up a batch of
+albums as monitored without kicking off a burst of searches, then let
+Lidarr find them in its own time, or search right away for the one you
+actually want now.
+
+`L` (add all missing) collapses the batch's missing tracks to one add per
+album and only acts on candidates it's confident about — an exact
+MusicBrainz identification whose title matches the Spotify album, or a
+near-perfect text match. Anything weaker (typically a track off a
+compilation, where the artist's own albums come back as poor guesses) is
+listed as "pick by hand with `l`" rather than added on a hunch.
+
 ### Navidrome picks these up automatically
 
 If the M3U8 output directory is inside Navidrome's own music folder (as it
@@ -441,6 +509,13 @@ internal/m3u8/          writes matched playlists as .m3u8 + missing-track
                         reports + cover art, one folder per playlist
 internal/navidromeapi/  authenticated client for Navidrome's own REST API —
                         currently just playlist cover-art upload
+internal/lidarrapi/     Lidarr v1 API client: album lookup (by text or exact
+                        MusicBrainz ID), add, monitor, search, and the root
+                        folder / profile lists Settings offers
+internal/lidarrmatch/   turns a Spotify track into ranked Lidarr album
+                        candidates (ISRC → MusicBrainz release group →
+                        Lidarr, falling back to text search) and applies the
+                        add / monitor / search action
 internal/coverart/      shared cover-art downloader (used by export and m3u8)
 internal/tui/          Bubble Tea UI — one screen per file (mainmenu.go,
                         settings.go, export_screen.go, match_screen.go),

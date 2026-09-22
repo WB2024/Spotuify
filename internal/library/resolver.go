@@ -46,12 +46,35 @@ func (r *MusicBrainzResolver) RecordingsForISRC(ctx context.Context, isrc string
 	}
 
 	r.cache.Entries[isrc] = mbCacheEntry{RecordingIDs: ids, Resolved: true}
+	r.noteChange()
+	return ids, nil
+}
+
+// ReleaseGroupsForRecording returns the release groups (albums, singles,
+// compilations...) a MusicBrainz recording appears on, from cache if
+// known, otherwise via the rate-limited API — the bridge from a Spotify
+// track's ISRC to the exact album Lidarr should be asked for.
+func (r *MusicBrainzResolver) ReleaseGroupsForRecording(ctx context.Context, recordingID string) ([]ReleaseGroup, error) {
+	if e, ok := r.cache.ReleaseGroups[recordingID]; ok && e.Resolved {
+		return e.Groups, nil
+	}
+
+	groups, err := r.client.ReleaseGroupsForRecording(ctx, recordingID)
+	if err != nil {
+		return nil, err
+	}
+
+	r.cache.ReleaseGroups[recordingID] = mbRGEntry{Groups: groups, Resolved: true}
+	r.noteChange()
+	return groups, nil
+}
+
+func (r *MusicBrainzResolver) noteChange() {
 	r.sinceFlush++
 	if r.sinceFlush >= 20 {
 		_ = saveMBCache(r.cachePath, r.cache)
 		r.sinceFlush = 0
 	}
-	return ids, nil
 }
 
 // Close persists any not-yet-flushed cache entries. Call it when done with
