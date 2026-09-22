@@ -13,28 +13,31 @@ import (
 // tracks.
 type Index struct {
 	Tracks []Track
-	byISRC map[string]*Track
-	byMBID map[string]*Track
+	byISRC map[string][]*Track
+	byMBID map[string][]*Track
 	byPath map[string]*Track
 }
 
-// ByISRC returns the local track carrying the given ISRC, if any.
-func (idx *Index) ByISRC(isrc string) (*Track, bool) {
+// ByISRC returns every local track carrying the given ISRC — usually one,
+// but not always: a reissue can carry forward the original tag, or a
+// various-artists compilation can legitimately reuse the same official
+// recording, so more than one local file can share an ISRC. Picking which
+// of them is the better match (e.g. by album) is the caller's job — see
+// match.All.
+func (idx *Index) ByISRC(isrc string) []*Track {
 	if idx == nil || isrc == "" {
-		return nil, false
+		return nil
 	}
-	t, ok := idx.byISRC[isrc]
-	return t, ok
+	return idx.byISRC[isrc]
 }
 
-// ByMBID returns the local track carrying the given MusicBrainz Recording
-// ID, if any.
-func (idx *Index) ByMBID(mbid string) (*Track, bool) {
+// ByMBID returns every local track carrying the given MusicBrainz
+// Recording ID — see ByISRC for why this can be more than one.
+func (idx *Index) ByMBID(mbid string) []*Track {
 	if idx == nil || mbid == "" {
-		return nil, false
+		return nil
 	}
-	t, ok := idx.byMBID[mbid]
-	return t, ok
+	return idx.byMBID[mbid]
 }
 
 // ByPath returns the indexed track at the given absolute path, if Navidrome
@@ -163,7 +166,7 @@ func parseISRCTag(tagsJSON string) []string {
 }
 
 func buildIndex(tracks []Track) *Index {
-	idx := &Index{Tracks: tracks, byISRC: make(map[string]*Track), byMBID: make(map[string]*Track), byPath: make(map[string]*Track, len(tracks))}
+	idx := &Index{Tracks: tracks, byISRC: make(map[string][]*Track), byMBID: make(map[string][]*Track), byPath: make(map[string]*Track, len(tracks))}
 	for i := range idx.Tracks {
 		t := &idx.Tracks[i]
 		idx.byPath[t.Path] = t
@@ -176,15 +179,11 @@ func buildIndex(tracks []Track) *Index {
 			if isrc == "" {
 				continue
 			}
-			if _, exists := idx.byISRC[isrc]; !exists {
-				idx.byISRC[isrc] = t
-			}
+			idx.byISRC[isrc] = append(idx.byISRC[isrc], t)
 		}
 
 		if t.MBID != "" {
-			if _, exists := idx.byMBID[t.MBID]; !exists {
-				idx.byMBID[t.MBID] = t
-			}
+			idx.byMBID[t.MBID] = append(idx.byMBID[t.MBID], t)
 		}
 	}
 	return idx

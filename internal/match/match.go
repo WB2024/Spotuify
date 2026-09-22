@@ -18,6 +18,17 @@
 //     and clearly reported as lower-confidence.
 //
 // Anything that clears none of these is reported as missing.
+//
+// An ISRC/MBID tag identifies the *recording*, not which local file to
+// pick when more than one carries it — a various-artists compilation can
+// legitimately reuse the same official master as the original album, and
+// a reissue often just carries the same tag forward. Tiers 1 and 2 both
+// resolve that through chooseCandidate: rank whatever's tagged by how well
+// its album matches Spotify's, and if even the best of those looks like a
+// poor match, also check the rest of the library for an untagged file
+// that's unmistakably the same song (title and artist both near-exact)
+// under a clearly better-matching album — see chooseCandidate's own doc
+// comment for the concrete case this is for.
 package match
 
 import (
@@ -91,7 +102,7 @@ func All(ctx context.Context, items []spotifyapi.PlaylistTrackItem, idx *library
 		if isrc == "" {
 			continue
 		}
-		if t, ok := idx.ByISRC(isrc); ok && !used[t.Path] {
+		if t := chooseCandidate(item.Track, idx.ByISRC(isrc), idx, used); t != nil {
 			results[i] = Result{Item: item, Method: MethodISRC, LocalPath: t.Path, Confidence: 1}
 			used[t.Path] = true
 		}
@@ -111,14 +122,15 @@ func All(ctx context.Context, items []spotifyapi.PlaylistTrackItem, idx *library
 			isrc := results[i].Item.Track.ExternalIDs.ISRC
 			mbids, err := opts.Resolver.RecordingsForISRC(ctx, isrc)
 			if err == nil {
+				var candidates []*library.Track
 				for _, mbid := range mbids {
-					if t, ok := idx.ByMBID(mbid); ok && !used[t.Path] {
-						results[i].Method = MethodISRC
-						results[i].LocalPath = t.Path
-						results[i].Confidence = 1
-						used[t.Path] = true
-						break
-					}
+					candidates = append(candidates, idx.ByMBID(mbid)...)
+				}
+				if t := chooseCandidate(results[i].Item.Track, candidates, idx, used); t != nil {
+					results[i].Method = MethodISRC
+					results[i].LocalPath = t.Path
+					results[i].Confidence = 1
+					used[t.Path] = true
 				}
 			}
 			if bridgeProgress != nil {
@@ -143,6 +155,104 @@ func All(ctx context.Context, items []spotifyapi.PlaylistTrackItem, idx *library
 	}
 
 	return results
+}
+
+// albumMatchGate is the minimum AlbumSimilarity an ISRC/MBID-tagged
+// candidate needs before its match is trusted without a second look.
+// Below it, betterAlbumAlternative checks whether an untagged file is a
+// clearly better fit — chooseCandidate's doc comment has the concrete case
+// this is for. 0.5 is deliberately loose: a legitimately-worded album
+// match (different capitalization, "&" vs "and", a missing "The") should
+// still comfortably clear it without triggering the extra search; it's
+// aimed at catching near-zero-overlap cases like an unrelated compilation
+// title, not nitpicking phrasing.
+const albumMatchGate = 0.5
+
+// altTitleThreshold and altArtistThreshold gate betterAlbumAlternative's
+// library-wide search: high enough that only a file unmistakably *the
+// same recording* — not just a same-named cover or a different song by
+// the same artist — is ever considered as a replacement for a tagged
+// candidate.
+const (
+	altTitleThreshold  = 0.90
+	altArtistThreshold = 0.7
+)
+
+// chooseCandidate picks the best local match for st among candidates
+// already confirmed, via ISRC or a MusicBrainz-bridged MBID, to be the
+// same recording — ranked by how well each one's *album* matches st's, so
+// when the same recording sits in more than one local file (a plain
+// pressing, a remaster, a various-artists compilation that reused the
+// same master), the one actually filed under the matching release wins
+// rather than whichever the database happened to return first.
+//
+// Concrete case this fixes: a track tagged with the correct ISRC only on
+// a copy filed under an unrelated tribute/compilation album, while the
+// copy under the *right* album (a remaster, say) has no ISRC tag of its
+// own at all — verified against a real library where "Gimme the Loot" by
+// The Notorious B.I.G. existed three times (the original album, a
+// remaster, and a 2021 various-artists compilation), only the compilation
+// copy carried an ISRC tag, and it happened to be the one Spotify's ISRC
+// pointed at. Rather than accept that untrustworthy pairing at face
+// value, this notices its album is a poor match, and finds the remaster
+// copy instead by requiring a near-exact title/artist match (so it's
+// unmistakably the same recording) combined with the best album match.
+func chooseCandidate(st *spotifyapi.Track, candidates []*library.Track, idx *library.Index, used map[string]bool) *library.Track {
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	var best *library.Track
+	bestScore := -1.0
+	for _, c := range candidates {
+		if used[c.Path] {
+			continue
+		}
+		if score := AlbumSimilarity(st.Album.Name, c.Album); score > bestScore {
+			bestScore = score
+			best = c
+		}
+	}
+
+	if best != nil && bestScore >= albumMatchGate {
+		return best
+	}
+	if alt := betterAlbumAlternative(st, idx, used, bestScore); alt != nil {
+		return alt
+	}
+	return best
+}
+
+// betterAlbumAlternative scans the whole library for an untagged file
+// that's unmistakably the same recording as st (title and artist both
+// near-exact) filed under an album that matches st's better than
+// currentScore. Only worth the full scan when chooseCandidate's tagged
+// candidates didn't already clear albumMatchGate.
+func betterAlbumAlternative(st *spotifyapi.Track, idx *library.Index, used map[string]bool, currentScore float64) *library.Track {
+	if idx == nil {
+		return nil
+	}
+	spotifyArtist := joinArtists(st.Artists)
+
+	var best *library.Track
+	bestScore := currentScore
+	for i := range idx.Tracks {
+		c := &idx.Tracks[i]
+		if used[c.Path] {
+			continue
+		}
+		if similarity(st.Name, c.Title) < altTitleThreshold {
+			continue
+		}
+		if similarity(spotifyArtist, c.Artist) < altArtistThreshold {
+			continue
+		}
+		if score := AlbumSimilarity(st.Album.Name, c.Album); score > bestScore {
+			bestScore = score
+			best = c
+		}
+	}
+	return best
 }
 
 func bestFuzzyMatch(st *spotifyapi.Track, candidates []library.Track, used map[string]bool) (*library.Track, float64) {

@@ -1,6 +1,9 @@
 package match
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // noise is a small set of common suffixes/markers that vary between a
 // Spotify listing and a locally-tagged file for what is otherwise the same
@@ -13,18 +16,38 @@ var noise = []string{
 	"live", "acoustic", "mono", "stereo",
 }
 
+// yearRemasterRe matches a remaster marker together with the year that
+// commonly rides along with it outside of brackets — "Song - 2005
+// Remaster", "Song Remastered 2011" — so the bare year doesn't survive as
+// leftover noise of its own once "remaster(ed)" is stripped below (a plain
+// substring replace on "remaster" alone would turn "Loot - 2005 Remaster"
+// into "Loot - 2005 ", not "Loot"). Bracketed forms ("(Remastered 2011)")
+// never reach here — stripBracketed already removed them.
+var yearRemasterRe = regexp.MustCompile(`(?i)-?\s*((19|20)\d{2}\s*remaster(ed)?|remaster(ed)?\s*(19|20)\d{2})`)
+
 // normalize lowercases, strips bracketed/parenthetical content and known
 // noise phrases, drops punctuation, and collapses whitespace — enough to
-// make "Song Title (Remastered 2011)" and "Song Title" compare equal.
+// make "Song Title (Remastered 2011)" and "Song Title" compare equal. Used
+// for track title and artist, where an edition/remaster marker doesn't
+// change what song it is.
 func normalize(s string) string {
 	s = strings.ToLower(s)
 	s = stripBracketed(s, '(', ')')
 	s = stripBracketed(s, '[', ']')
+	s = yearRemasterRe.ReplaceAllString(s, "")
 
 	for _, n := range noise {
 		s = strings.ReplaceAll(s, n, "")
 	}
 
+	return filterAlnum(s)
+}
+
+// filterAlnum strips everything but letters/digits from an already-
+// lowercased string, folding any run of other characters (punctuation,
+// brackets, ...) into a single space, then trims. Shared by normalize and
+// normalizeAlbum, which differ only in what they do before calling this.
+func filterAlnum(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	prevSpace := false
@@ -41,6 +64,18 @@ func normalize(s string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// normalizeAlbum is deliberately lighter than normalize: it lowercases and
+// strips punctuation, but does NOT discard bracketed content or "noise"
+// words like "remaster" — for an album name, that's exactly the signal
+// that distinguishes one physical release from another ("Ready To Die" vs
+// "Ready To Die (The Remaster CD And DVD)" vs a various-artists
+// compilation that happens to reuse the same recording). Collapsing all of
+// those to the same normalized string, the way normalize() does for track
+// titles, would make AlbumSimilarity unable to tell them apart.
+func normalizeAlbum(s string) string {
+	return filterAlnum(strings.ToLower(s))
 }
 
 func stripBracketed(s string, open, close byte) string {
@@ -66,7 +101,19 @@ func Similarity(a, b string) float64 { return similarity(a, b) }
 // similarity returns a 0..1 score for how alike two strings are, based on
 // normalized Levenshtein edit distance.
 func similarity(a, b string) float64 {
-	na, nb := normalize(a), normalize(b)
+	return levenshteinSimilarity(normalize(a), normalize(b))
+}
+
+// AlbumSimilarity compares two album names the way similarity compares
+// titles/artists, but using normalizeAlbum's lighter normalization instead
+// — see its doc comment for why an album needs edition markers kept
+// rather than discarded. Exported for the same reason as Similarity: other
+// packages (the Lidarr album resolver) need the identical comparison.
+func AlbumSimilarity(a, b string) float64 {
+	return levenshteinSimilarity(normalizeAlbum(a), normalizeAlbum(b))
+}
+
+func levenshteinSimilarity(na, nb string) float64 {
 	if na == "" && nb == "" {
 		return 0
 	}

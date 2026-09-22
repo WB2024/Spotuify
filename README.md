@@ -281,7 +281,35 @@ Matching is tiered, from most to least certain:
    (`GET /ws/2/isrc/{isrc}`), then checks those recording IDs against local
    files' `mbz_recording_id`. Still ISRC-certain (tier 1 in effect) — the
    ISRC just got resolved by looking sideways through MusicBrainz instead
-   of reading it straight off a tag. Looked into this before building it:
+   of reading it straight off a tag.
+
+   **Which local file, when more than one carries the same ISRC.** An
+   ISRC/MBID identifies the *recording*, not which of possibly several
+   local copies to use — a various-artists compilation can legitimately
+   reuse the exact same official master as the original album, and a
+   reissue often just carries the tag forward. Picking whichever the
+   database happened to return first could land on a technically-correct
+   but oddly-filed copy: caught this for real when "Gimme the Loot" by The
+   Notorious B.I.G. — present locally under the original *Ready To Die*,
+   a *Ready To Die (The Remaster)*, and a 2021 various-artists compilation
+   — matched to the compilation copy, because that was the only one of the
+   three actually carrying an ISRC tag, and Spotify's own ISRC happened to
+   point at it. Tier 1 and this bridge tier both now rank whichever
+   candidates are tagged by how well their *album* matches Spotify's
+   (`AlbumSimilarity`, in `internal/match`) rather than taking the first
+   one; if even the best of those still looks like a poor album match, it
+   also checks the rest of the library for an untagged file that's
+   unmistakably the same recording (title and artist both near-exact)
+   filed under a clearly better-matching album, and prefers that instead —
+   which is what finds the remaster copy in the example above, since it
+   has no ISRC tag of its own at all. Verified against this user's library:
+   only the handful of tracks with a genuine multi-copy ambiguity changed
+   which file they resolved to (all correctly, including cases where the
+   *compilation* copy was the right call because that's what the Spotify
+   playlist entry itself pointed at) — everything else was untouched, and
+   the overall match rate didn't drop.
+
+   Looked into this before building it:
    neither the MusicBrainz nor the ListenBrainz API has a *direct* "give me
    a Spotify ID for this MusicBrainz ID" endpoint (ListenBrainz's
    `metadata/lookup` goes the other way, text → MBID) — so ISRC is the
@@ -308,7 +336,10 @@ Matching is tiered, from most to least certain:
 3. **Fuzzy fallback.** For anything left unmatched — no ISRC either
    side — a normalized artist/title similarity score (Levenshtein-based,
    after stripping punctuation, case, and common noise like "remastered"
-   or "radio edit") against the whole library, requiring a fairly high
+   or "radio edit" — including a Spotify-style "Song - 2005 Remaster"
+   suffix, where the trailing year used to survive normalization as
+   leftover noise of its own and quietly depress the score) against the
+   whole library, requiring a fairly high
    score (≥0.82) to count as a match. Each local file is only ever
    assigned to one Spotify track per run, so near-duplicate local files
    can't all silently claim the same track. Turn off "Fuzzy-match tracks
