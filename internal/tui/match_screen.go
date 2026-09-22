@@ -263,19 +263,31 @@ func methodRowColor(method match.Method) lipgloss.AdaptiveColor {
 // escapes, so pre-coloring a cell's text and letting table's own Truncate
 // run over it corrupts the escape sequences instead of the visible text.
 // This mirrors table's own cell-composition pipeline (same
-// Width/MaxWidth/Inline/Truncate treatment per cell, and the identical
-// start/end windowing formula table uses internally, from tbl.Cursor() and
-// tbl.Height()) closely enough to be a drop-in replacement for tbl.View(),
-// just with a method-colored background baked into each row's own cells
-// rather than wrapped around the row after the fact (which would suffer
-// the same embedded-reset problem: each cell's own style already ends in
-// its own ANSI reset, so a background applied only around the outside
-// would just get wiped by the first one).
+// Width/MaxWidth/Inline/Truncate treatment per cell) closely enough to be a
+// drop-in replacement for tbl.View(), just with a method-colored background
+// baked into each row's own cells rather than wrapped around the row after
+// the fact (which would suffer the same embedded-reset problem: each
+// cell's own style already ends in its own ANSI reset, so a background
+// applied only around the outside would just get wiped by the first one).
+//
+// The visible row window is computed directly (cursor kept in view,
+// clamped at both ends) rather than by copying table's own start/end
+// formula — that one (verified against its source) is an *overscan* window
+// up to 2×Height rows, meant to be fed through table's internal
+// viewport.Model so its unexported YOffset can clip it down to exactly
+// Height visible rows. There's no way to read that offset from outside the
+// package, and rendering the overscan window unclipped, as this used to
+// do, produced up to 2× too many rows at some cursor positions — tall
+// enough to overflow a real terminal, which then scrolled on its own and
+// cut the chrome above the table off-screen.
 func renderMatchTable(tbl table.Model, methodAt func(row int) match.Method) string {
 	cols := tbl.Columns()
 	rows := tbl.Rows()
 	cursor := tbl.Cursor()
 	height := tbl.Height()
+	if height < 1 {
+		height = 1
+	}
 	sty := tableStyles()
 
 	renderCell := func(style lipgloss.Style, value string, width int) string {
@@ -291,8 +303,11 @@ func renderMatchTable(tbl table.Model, methodAt func(row int) match.Method) stri
 		header = append(header, renderCell(sty.Header, c.Title, c.Width))
 	}
 
-	start := clampInt(cursor-height, 0, cursor)
-	end := clampInt(cursor+height, cursor, len(rows))
+	start := 0
+	if len(rows) > height {
+		start = clampInt(cursor-height/2, 0, len(rows)-height)
+	}
+	end := clampInt(start+height, start, len(rows))
 
 	lines := []string{lipgloss.JoinHorizontal(lipgloss.Top, header...)}
 	for i := start; i < end; i++ {
