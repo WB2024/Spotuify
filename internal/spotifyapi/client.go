@@ -43,9 +43,20 @@ func New(httpClient *http.Client) *Client {
 	}
 }
 
+// maxRetryAfterWait bounds how long a single 429 is worth silently sleeping
+// through before retrying. Spotify's Retry-After is usually a few seconds
+// mid-batch, which this transparently waits out - but once an app is
+// properly rate-limited it can come back with a wait measured in *hours*
+// (observed firsthand: 16944s, ~4h42m, after a large batch match run).
+// Sleeping through that would leave the UI stuck on "Loading..." for hours
+// with no indication anything's wrong, so a wait longer than this fails
+// immediately instead, with a clear message saying when to try again.
+const maxRetryAfterWait = 20 * time.Second
+
 // get issues a GET request against the Spotify Web API and decodes the JSON
-// response body into out. It retries on 429 (honoring Retry-After) and on
-// transient 5xx errors, with a small bounded number of attempts.
+// response body into out. It retries on 429 (honoring Retry-After, up to
+// maxRetryAfterWait) and on transient 5xx errors, with a small bounded
+// number of attempts.
 func (c *Client) get(ctx context.Context, path string, out any) error {
 	const maxAttempts = 6
 
@@ -70,6 +81,10 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		if resp.StatusCode == http.StatusTooManyRequests {
 			wait := retryAfter(resp.Header, 2*time.Second)
 			resp.Body.Close()
+			if wait > maxRetryAfterWait {
+				return fmt.Errorf("rate limited by Spotify until %s (in %s) - wait and try again",
+					time.Now().Add(wait).Format("15:04"), wait.Round(time.Second))
+			}
 			lastErr = fmt.Errorf("rate limited by Spotify (attempt %d/%d), waited %s", attempt, maxAttempts, wait)
 			if err := sleep(ctx, wait); err != nil {
 				return err

@@ -560,9 +560,21 @@ Spotify doesn't publish a fixed requests/second number — it enforces a
 rolling per-app limit and returns `429` with a `Retry-After` header when
 you exceed it
 (docs: https://developer.spotify.com/documentation/web-api/concepts/rate-limits).
-Spotuify self-throttles to a conservative steady rate and, on a `429`,
-sleeps for exactly what `Retry-After` says before retrying — so large
-libraries export reliably instead of tripping the limit repeatedly.
+Spotuify self-throttles to a conservative steady rate and, on a `429` with a
+short `Retry-After` (the normal case mid-batch), sleeps that out and retries
+transparently. A `Retry-After` longer than 20 seconds means the app is
+properly rate-limited, not just momentarily over a burst — Spotify has been
+observed returning waits of several *hours* at that point — so instead of
+silently blocking the UI for however long that is, it fails immediately
+with an error naming when to try again. Matching a very large number of
+playlists in one batch (e.g. select-all across a 400+ playlist library) is
+what's most likely to trigger this; if a batch run comes back with several
+playlists failed with a "rate limited by Spotify until ..." error, that's
+what happened, and re-running just those playlists after that time will
+pick them up — no need to redo the whole batch, and the ones already
+written are untouched. Playlists that failed to match show a count and are
+listed first, ahead of the (potentially very long, for a big batch)
+per-playlist success list.
 
 ## A note on API access
 

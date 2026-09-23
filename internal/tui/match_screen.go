@@ -1279,14 +1279,31 @@ func (m MatchModel) viewFilePicker() string {
 	return header + m.fp.View()
 }
 
+// viewOutcomes summarizes each playlist's write outcome below the results
+// table. This isn't itself scrollable, and a select-all batch across a
+// large library can run into the hundreds of playlists - so a handful of
+// failures (e.g. Spotify rate-limiting partway through) would get buried
+// among hundreds of success lines below the fold, with nothing to indicate
+// anything had gone wrong. Failures are counted and listed first instead.
 func (m MatchModel) viewOutcomes() string {
-	var b strings.Builder
+	var failed, ok []playlistOutcome
 	for _, run := range m.runs {
-		o := run.outcome
-		if o.err != nil {
-			b.WriteString(errorStyle.Render(fmt.Sprintf("✗ %s: %v", o.name, o.err)) + "\n")
-			continue
+		if run.outcome.err != nil {
+			failed = append(failed, run.outcome)
+		} else {
+			ok = append(ok, run.outcome)
 		}
+	}
+
+	var b strings.Builder
+	if len(failed) > 0 {
+		b.WriteString(errorStyle.Render(fmt.Sprintf("%d of %d playlists failed to match:", len(failed), len(m.runs))) + "\n")
+		for _, o := range failed {
+			b.WriteString(errorStyle.Render(fmt.Sprintf("✗ %s: %v", o.name, o.err)) + "\n")
+		}
+		b.WriteString("\n")
+	}
+	for _, o := range ok {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("%s: %d/%d matched → %s", o.name, o.matched, o.total, o.dir)) + "\n")
 		if o.navidromeSync != "" {
 			b.WriteString(warnStyle.Render(fmt.Sprintf("    Navidrome sync: %s", o.navidromeSync)) + "\n")
