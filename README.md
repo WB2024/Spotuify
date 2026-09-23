@@ -138,7 +138,18 @@ table also responds to the mouse wheel, in addition to the keyboard.
 - `enter` — match the checked (or highlighted) playlists against your
   local library and write `.m3u8` files. The first time this runs, it
   loads and indexes your Navidrome library (see below) — after that it's
-  cached and reused for the rest of the session.
+  cached and reused for the rest of the session. For each playlist, if
+  Export Playlists has already written a `playlist.json` for it (matched by
+  playlist ID, so a rename since exporting doesn't break the match), that's
+  reused directly instead of re-fetching the playlist and its tracks from
+  Spotify — shown as "using local export from ...". Only playlists with no
+  export on disk hit the Spotify API. This is a straight trade: whatever
+  changed on that playlist since it was exported won't be reflected, but
+  for a very large batch (e.g. select-all across a big library) it avoids
+  spending API calls on playlists already fetched in full, and cuts how
+  much of the run is exposed to Spotify's rate limit (see "Rate limits"
+  below) to just what's actually new. Exporting everything right before a
+  big match run is the intended way to use this.
 - Shows a live table, one row per track, as each playlist is matched, each
   row background-tinted by method (`isrc`/`fuzzy`/`manual`/`missing`) for a
   quick visual scan of how clean a playlist came out.
@@ -575,6 +586,12 @@ pick them up — no need to redo the whole batch, and the ones already
 written are untouched. Playlists that failed to match show a count and are
 listed first, ahead of the (potentially very long, for a big batch)
 per-playlist success list.
+
+For a very large library, the most effective way to avoid tripping this at
+all is exporting everything first (Export Playlists, select all) and then
+matching — Match to Local Library reuses each playlist's export instead of
+fetching it from Spotify again (see above), so only playlists with no
+export on disk spend any API calls during the match run.
 
 ## A note on API access
 
