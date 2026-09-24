@@ -12,6 +12,7 @@ package spotifyapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,17 +31,42 @@ type Client struct {
 	// limiter self-throttles outgoing requests to a conservative steady
 	// rate so we rarely hit a 429 in the first place. Spotify's actual
 	// limit is an undocumented rolling window per app; this is a polite
-	// default, not a guarantee.
+	// default, not a guarantee - and not a static one: slowDown halves it
+	// every time a 429 actually comes back, since that's Spotify directly
+	// saying the current rate is too fast. A batch across a few hundred
+	// playlists (~400-500+ requests) has been observed tripping a real,
+	// multi-hour lockout at the previous fixed ~6-7 req/s, so starting
+	// more conservative and backing off further from there beats guessing
+	// a single static number that's still too fast.
 	limiter *rate.Limiter
 }
+
+// minLimit is the slowest slowDown will ever throttle down to - about one
+// request every 4 seconds. Slow enough to almost never be the cause of a
+// 429, but still finite so a very large batch doesn't effectively stall.
+const minLimit = rate.Limit(1.0 / 4.0)
 
 // New wraps an OAuth-authenticated http.Client (see internal/auth) for use
 // against the Spotify Web API.
 func New(httpClient *http.Client) *Client {
 	return &Client{
 		http:    httpClient,
-		limiter: rate.NewLimiter(rate.Every(150*time.Millisecond), 5), // ~6-7 req/s steady, small burst
+		limiter: rate.NewLimiter(rate.Every(400*time.Millisecond), 3), // ~2.5 req/s steady, small burst
 	}
+}
+
+// slowDown halves the client's request rate (down to minLimit), applying
+// for the rest of this Client's lifetime - not just the current retry.
+// Called whenever Spotify actually returns a 429: getting one at all means
+// the current rate is too fast, so back off further rather than resuming
+// at the same rate that just tripped it, which risks immediately tripping
+// it again over the rest of a large batch.
+func (c *Client) slowDown() {
+	next := c.limiter.Limit() / 2
+	if next < minLimit {
+		next = minLimit
+	}
+	c.limiter.SetLimit(next)
 }
 
 // maxRetryAfterWait bounds how long a single 429 is worth silently sleeping
@@ -81,9 +107,9 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		if resp.StatusCode == http.StatusTooManyRequests {
 			wait := retryAfter(resp.Header, 2*time.Second)
 			resp.Body.Close()
+			c.slowDown()
 			if wait > maxRetryAfterWait {
-				return fmt.Errorf("rate limited by Spotify until %s (in %s) - wait and try again",
-					time.Now().Add(wait).Format("15:04"), wait.Round(time.Second))
+				return &RateLimitError{Until: time.Now().Add(wait)}
 			}
 			lastErr = fmt.Errorf("rate limited by Spotify (attempt %d/%d), waited %s", attempt, maxAttempts, wait)
 			if err := sleep(ctx, wait); err != nil {
@@ -130,6 +156,30 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("spotify api error %d on %s: %s", e.StatusCode, e.Path, e.Body)
+}
+
+// RateLimitError is returned in place of the usual retry-and-continue
+// behavior when a 429's Retry-After exceeds maxRetryAfterWait - a real
+// lockout, not a momentary burst. Until is when it's expected to clear.
+// Callers running a whole batch over many playlists (export, match) should
+// treat this as a signal to stop the batch entirely rather than just
+// skip the one call that hit it: every other call in the batch is about
+// to hit the exact same lockout, so continuing would only spend more
+// requests for more of the same error.
+type RateLimitError struct {
+	Until time.Time
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("rate limited by Spotify until %s (in %s) - wait and try again",
+		e.Until.Format("15:04"), time.Until(e.Until).Round(time.Second))
+}
+
+// AsRateLimitError reports whether err is (or wraps) a *RateLimitError.
+func AsRateLimitError(err error) (*RateLimitError, bool) {
+	var rl *RateLimitError
+	ok := errors.As(err, &rl)
+	return rl, ok
 }
 
 // NotFound reports whether an error represents Spotify's 404 (helpful for

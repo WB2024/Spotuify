@@ -571,21 +571,26 @@ Spotify doesn't publish a fixed requests/second number — it enforces a
 rolling per-app limit and returns `429` with a `Retry-After` header when
 you exceed it
 (docs: https://developer.spotify.com/documentation/web-api/concepts/rate-limits).
-Spotuify self-throttles to a conservative steady rate and, on a `429` with a
-short `Retry-After` (the normal case mid-batch), sleeps that out and retries
-transparently. A `Retry-After` longer than 20 seconds means the app is
-properly rate-limited, not just momentarily over a burst — Spotify has been
-observed returning waits of several *hours* at that point — so instead of
-silently blocking the UI for however long that is, it fails immediately
-with an error naming when to try again. Matching a very large number of
-playlists in one batch (e.g. select-all across a 400+ playlist library) is
-what's most likely to trigger this; if a batch run comes back with several
-playlists failed with a "rate limited by Spotify until ..." error, that's
-what happened, and re-running just those playlists after that time will
-pick them up — no need to redo the whole batch, and the ones already
-written are untouched. Playlists that failed to match show a count and are
-listed first, ahead of the (potentially very long, for a big batch)
-per-playlist success list.
+Spotuify self-throttles to a conservative steady rate, and halves that rate
+every time a `429` actually comes back — getting one at all means the
+current rate is too fast, so it backs off further rather than resuming at
+the exact rate that just tripped it, down to a floor of one request per 4
+seconds. On a `429` with a short `Retry-After` (a genuinely momentary
+burst), it sleeps that out and retries transparently. A `Retry-After`
+longer than 20 seconds means the app is properly rate-limited, not just
+momentarily over a burst — Spotify has been observed returning waits of
+several *hours* at that point — so instead of silently blocking the UI for
+however long that is, the whole batch (every playlist still queued, not
+just the one that hit it) stops immediately with a clear "rate limited by
+Spotify until ..." error, rather than grinding through the rest of a large
+queue making the exact same doomed request over and over. Matching or
+exporting a very large number of playlists in one batch (e.g. select-all
+across a 400+ playlist library) is what's most likely to trigger this in
+the first place; if a batch run comes back with playlists failed that way,
+re-running just those after that time will pick them up — no need to redo
+the whole batch, and anything already written is untouched. Playlists that
+failed show a count and are listed first, ahead of the (potentially very
+long, for a big batch) per-playlist success list.
 
 For a very large library, the most effective way to avoid tripping this at
 all is exporting everything first (Export Playlists, select all) and then

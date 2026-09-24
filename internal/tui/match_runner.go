@@ -69,7 +69,7 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 	// full. Spotify is still used for anything that was never exported.
 	exportsByID := export.ScanExports(cfg.ExportDir)
 
-	for _, sp := range queue {
+	for i, sp := range queue {
 		if ctx.Err() != nil {
 			return
 		}
@@ -91,6 +91,10 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			full, err = client.Playlist(ctx, sp.ID)
 			if err != nil {
 				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: err})
+				if _, locked := spotifyapi.AsRateLimitError(err); locked {
+					skipRestMatch(ctx, ch, queue[i+1:], err)
+					return
+				}
 				continue
 			}
 
@@ -99,6 +103,10 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			})
 			if err != nil {
 				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: err})
+				if _, locked := spotifyapi.AsRateLimitError(err); locked {
+					skipRestMatch(ctx, ch, queue[i+1:], err)
+					return
+				}
 				continue
 			}
 		}
@@ -156,6 +164,15 @@ func waitForMatchEvent(ch <-chan matchEvent) tea.Cmd {
 			return matchEvent{kind: matchEventAllDone}
 		}
 		return ev
+	}
+}
+
+// skipRestMatch marks every not-yet-attempted playlist in the batch with
+// the same rate-limit error that just stopped it, without making any more
+// requests - see skipRest in export_runner.go for why.
+func skipRestMatch(ctx context.Context, ch chan<- matchEvent, rest []spotifyapi.SimplifiedPlaylist, err error) {
+	for _, sp := range rest {
+		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: err})
 	}
 }
 

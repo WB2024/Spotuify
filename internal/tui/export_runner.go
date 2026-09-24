@@ -16,7 +16,7 @@ import (
 func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.Exporter, queue []spotifyapi.SimplifiedPlaylist, ch chan<- exportEvent) {
 	defer close(ch)
 
-	for _, sp := range queue {
+	for i, sp := range queue {
 		if ctx.Err() != nil {
 			return
 		}
@@ -26,6 +26,10 @@ func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.
 		full, err := client.Playlist(ctx, sp.ID)
 		if err != nil {
 			send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: err})
+			if _, locked := spotifyapi.AsRateLimitError(err); locked {
+				skipRest(ctx, ch, queue[i+1:], err)
+				return
+			}
 			continue
 		}
 
@@ -34,6 +38,10 @@ func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.
 		})
 		if err != nil {
 			send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: err})
+			if _, locked := spotifyapi.AsRateLimitError(err); locked {
+				skipRest(ctx, ch, queue[i+1:], err)
+				return
+			}
 			continue
 		}
 
@@ -55,6 +63,17 @@ func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.
 	}
 
 	send(ctx, ch, exportEvent{kind: eventAllDone})
+}
+
+// skipRest marks every not-yet-attempted playlist in the batch with the
+// same rate-limit error that just stopped it, without making any more
+// requests - every one of them would hit the exact same lockout, so
+// there's nothing to gain by trying each in turn and a real cost (more
+// load on an API that just said to back off).
+func skipRest(ctx context.Context, ch chan<- exportEvent, rest []spotifyapi.SimplifiedPlaylist, err error) {
+	for _, sp := range rest {
+		send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: err})
+	}
 }
 
 func send(ctx context.Context, ch chan<- exportEvent, ev exportEvent) {
