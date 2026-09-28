@@ -531,6 +531,18 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 			return s, s.cycleLidarrOption(s.cursor), settingsNone
 
 		case s.cursor == rowFeishinSync:
+			// Save first: this reads cfg, not the live form, so without
+			// this a toggle (or any other field) changed but not yet
+			// saved would silently run against the old value - confusing
+			// right next to the very toggle that looks like it should
+			// control it. doSave's bool return means "credentials
+			// changed" (see its own doc comment), not "save succeeded" -
+			// s.statusErr, which it always sets either way, is the actual
+			// success/failure signal here.
+			credsChanged := s.doSave()
+			if s.statusErr {
+				return s, nil, settingsNone
+			}
 			if !s.cfg.HasFeishinSync() {
 				s.status = "Set Feishin's local storage path, server ID, and Navidrome username first."
 				s.statusErr = true
@@ -538,7 +550,11 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 			}
 			s.status = "Syncing Feishin playlist order..."
 			s.statusErr = false
-			return s, syncFeishinPlaylistOrder(s.cfg), settingsNone
+			cmd := syncFeishinPlaylistOrder(s.cfg)
+			if credsChanged {
+				return s, cmd, settingsClientInvalidated
+			}
+			return s, cmd, settingsNone
 
 		case s.cursor == rowLogout:
 			s.doLogout()
