@@ -203,7 +203,17 @@ table also responds to the mouse wheel, in addition to the keyboard.
 - `↑`/`↓` / mouse wheel — move between fields / scroll; the whole form is
   taller than one screenful, so this scrolls a viewport rather than dumping
   everything at once — arrow keys keep the highlighted field in view as you
-  move past either edge, and the mouse wheel scrolls independently of it
+  move past either edge, and the mouse wheel scrolls independently of it (so
+  you can scroll straight to a field several screens down without walking
+  the cursor there one row at a time)
+- left-click a field to select it — this is what actually makes the field
+  you scrolled to with the wheel reachable, since scrolling and the
+  keyboard cursor are deliberately independent; clicking moves the cursor
+  to wherever you clicked rather than requiring the keyboard to already be
+  there. Log out/Save/Back to menu sit on one shared line and aren't
+  individually clickable (`enter` still reaches all three via the keyboard
+  as before) — resolving a click there to one specific button isn't
+  reliable enough to risk guessing "Log out"
 - `enter` — edit the highlighted field (text fields), or activate an action
   row (Log out / Save / Back)
 - while editing a field: type normally, `enter`/`esc` to confirm and stop

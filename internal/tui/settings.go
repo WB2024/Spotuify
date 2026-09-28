@@ -395,19 +395,66 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd, settingsActi
 		return s, cmd, settingsNone
 	}
 	// Mouse wheel scrolling (viewport handles tea.MouseMsg natively,
-	// unlike table/list elsewhere in this app) and anything else that
-	// isn't cursor navigation, which handleKey already fully owns.
+	// unlike table/list elsewhere in this app), left-click-to-select (see
+	// rowAtScreenY), and anything else that isn't cursor navigation, which
+	// handleKey already fully owns.
 	//
 	// SetContent must run here (a pointer-friendly path whose result is
 	// returned and persisted), not in View, which runs on a value receiver
 	// - any state View mutates is a throwaway copy, so if SetContent only
 	// ever ran there the viewport's line buffer would stay permanently
 	// empty and every scroll would clamp straight back to 0.
-	content, _ := s.renderContent()
+	content, _, rowLines := s.renderContent()
 	s.viewport.SetContent(content)
+
+	// Wheel-scrolling the viewport (just below) is deliberately independent
+	// of the keyboard cursor - see followCursor's own comment - but that
+	// means scrolling to a field with the wheel doesn't make it reachable:
+	// the cursor, and so enter/space/typing, stays wherever it was. A left
+	// click resolves that by moving the cursor to whatever row is actually
+	// under the pointer, using the same coordinates the click itself
+	// reports rather than assuming the cursor is already there.
+	if mm, ok := msg.(tea.MouseMsg); ok && mm.Action == tea.MouseActionPress && mm.Button == tea.MouseButtonLeft {
+		if row, ok := s.rowAtScreenY(mm.Y, rowLines); ok {
+			s.cursor = row
+			s.followCursor()
+			return s, nil, settingsNone
+		}
+	}
+
 	var cmd tea.Cmd
 	s.viewport, cmd = s.viewport.Update(msg)
 	return s, cmd, settingsNone
+}
+
+// settingsChromeLinesAbove is how many screen lines sit above the Settings
+// viewport's own content: frame()'s top padding (1 line, Padding(1,2)),
+// the logo/breadcrumb line (1), and the blank line between it and the
+// content (1) - see chrome.go's frame(). Mouse events report absolute
+// screen coordinates, so resolving a click back to a row needs this to
+// translate a click's Y into a line within the viewport's own content.
+const settingsChromeLinesAbove = 3
+
+// rowAtScreenY resolves a mouse click's absolute screen row to whichever
+// settingsRow occupies that line, accounting for how far the viewport is
+// currently scrolled. Rows spanning more than one line (a text field's
+// label + value + hint) resolve correctly from any of their lines, since
+// this picks whichever row's own line is the closest one at or before the
+// clicked line - the same logic a click needs regardless of a row's height.
+func (s SettingsModel) rowAtScreenY(mouseY int, rowLines map[settingsRow]int) (settingsRow, bool) {
+	contentLine := s.viewport.YOffset + (mouseY - settingsChromeLinesAbove)
+	if contentLine < 0 {
+		return 0, false
+	}
+	var best settingsRow
+	bestLine := -1
+	found := false
+	for row, line := range rowLines {
+		if line <= contentLine && line > bestLine {
+			best, bestLine, found = row, line, true
+		}
+	}
+	return best, found
 }
 
 func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settingsAction) {
@@ -594,10 +641,11 @@ func (s *SettingsModel) doLogout() {
 
 // renderContent builds the form's full text content (every group, field,
 // hint, and the action row) and reports which line the currently-selected
-// row landed on — see settingsCursorMarker and the View/followCursor split
-// below for why the two are bundled into one method rather than measured
-// separately.
-func (s SettingsModel) renderContent() (string, int) {
+// row landed on, plus a map of every row's line (for mouse click handling,
+// which needs to turn a clicked screen line back into a row) — see
+// settingsRowMarker and the View/followCursor split below for why these are
+// bundled into one method rather than measured separately.
+func (s SettingsModel) renderContent() (string, int, map[settingsRow]int) {
 	var b strings.Builder
 	panelW := s.panelWidth()
 
@@ -613,11 +661,10 @@ func (s SettingsModel) renderContent() (string, int) {
 		selected := s.cursor == idx
 		marker := "  "
 		labelStyle := dimStyle
-		mark := ""
+		mark := settingsRowMarker(idx)
 		if selected {
 			marker = "▸ "
 			labelStyle = selectedRowStyle
-			mark = settingsCursorMarker
 		}
 		b.WriteString(mark + labelStyle.Render(marker+label) + "\n")
 		fieldStyle := lipgloss.NewStyle()
@@ -634,11 +681,10 @@ func (s SettingsModel) renderContent() (string, int) {
 		selected := s.cursor == idx
 		marker := "  "
 		labelStyle := dimStyle
-		mark := ""
+		mark := settingsRowMarker(idx)
 		if selected {
 			marker = "▸ "
 			labelStyle = selectedRowStyle
-			mark = settingsCursorMarker
 		}
 		box := "☐"
 		if on {
@@ -677,11 +723,10 @@ func (s SettingsModel) renderContent() (string, int) {
 		selected := s.cursor == idx
 		marker := "  "
 		labelStyle := dimStyle
-		mark := ""
+		mark := settingsRowMarker(idx)
 		if selected {
 			marker = "▸ "
 			labelStyle = selectedRowStyle
-			mark = settingsCursorMarker
 		}
 		body.WriteString(mark + labelStyle.Render(marker+label) + "\n")
 		body.WriteString("    " + s.lidarrOptionLabel(idx) + "\n")
@@ -708,11 +753,10 @@ func (s SettingsModel) renderContent() (string, int) {
 		selected := s.cursor == idx
 		marker := "  "
 		labelStyle := style
-		mark := ""
+		mark := settingsRowMarker(idx)
 		if selected {
 			marker = "▸ "
 			labelStyle = style.Bold(true).Underline(true)
-			mark = settingsCursorMarker
 		}
 		return mark + labelStyle.Render(marker+label)
 	}
@@ -730,22 +774,57 @@ func (s SettingsModel) renderContent() (string, int) {
 
 	content := b.String()
 	selectedLine := 0
-	if idx := strings.IndexByte(content, 0); idx >= 0 {
-		selectedLine = strings.Count(content[:idx], "\n")
-		content = content[:idx] + content[idx+1:]
+	rowLines := make(map[settingsRow]int)
+	lineRowCount := make(map[int]int)
+	for {
+		idx := strings.IndexByte(content, 0)
+		if idx < 0 || idx+1 >= len(content) {
+			break
+		}
+		row := decodeSettingsRowMarker(content[idx+1])
+		line := strings.Count(content[:idx], "\n")
+		rowLines[row] = line
+		lineRowCount[line]++
+		if row == s.cursor {
+			selectedLine = line
+		}
+		content = content[:idx] + content[idx+2:]
 	}
-	return content, selectedLine
+	// Log out/Save/Back share one rendered line (lipgloss.JoinHorizontal,
+	// above) - Y alone can't tell which of the three a click landed on, and
+	// guessing wrong on that specific line risks guessing "Log out". Leave
+	// lines with more than one row on them out of the click-target map
+	// entirely rather than resolve them incorrectly; keyboard nav still
+	// reaches all three exactly as before.
+	for row, line := range rowLines {
+		if lineRowCount[line] > 1 {
+			delete(rowLines, row)
+		}
+	}
+	return content, selectedLine, rowLines
 }
 
-// settingsCursorMarker is a sentinel prefixed onto whichever row's label is
-// currently selected, purely so renderContent can find out which line that
-// row landed on in the *final*, fully-rendered output (after every group's
-// border/padding and any hint-text wrapping has already happened) without
-// having to predict any of that ahead of time — it just searches the real
-// output. Stripped before renderContent returns. A raw NUL byte never
-// appears in this form's own content otherwise, so there's no ambiguity to
-// worry about.
-const settingsCursorMarker = "\x00"
+// settingsRowMarker prefixes whichever row it's called for with a sentinel
+// (a NUL byte, which never appears in this form's own content otherwise,
+// plus the row's own index) so renderContent can find out which line every
+// row landed on in the *final*, fully-rendered output - after every group's
+// border/padding and any hint-text wrapping has already happened - without
+// having to predict any of that ahead of time; it just searches the real
+// output. Every row gets one, not just the selected one: followCursor only
+// ever needed the selected row's line, but resolving a mouse click to a row
+// needs all of them. Stripped before renderContent returns.
+func settingsRowMarker(row settingsRow) string {
+	return string([]byte{0, byte(0x80 + int(row))})
+}
+
+// decodeSettingsRowMarker reverses settingsRowMarker's second byte. The
+// 0x80 offset keeps every possible marker byte well clear of '\n' (0x0A) -
+// colliding with that would corrupt renderContent's line-counting for
+// every marker after it, since it counts newlines in the still-unstripped
+// prefix of the string as it scans forward.
+func decodeSettingsRowMarker(b byte) settingsRow {
+	return settingsRow(int(b) - 0x80)
+}
 
 // View renders the form through the viewport — this is what makes it
 // scrollable at all (previously the whole form, every group/field/hint,
@@ -754,7 +833,7 @@ const settingsCursorMarker = "\x00"
 // happened to land on, with no way back up). It deliberately does *not*
 // touch the viewport's scroll position itself — see followCursor for why.
 func (s SettingsModel) View() string {
-	content, _ := s.renderContent()
+	content, _, _ := s.renderContent()
 	s.viewport.SetContent(content)
 	view := s.viewport.View()
 	if s.status != "" {
@@ -775,7 +854,7 @@ func (s SettingsModel) View() string {
 // snapping back to the cursor's row on every render would fight, and
 // immediately undo, any independent wheel scrolling within the same frame.
 func (s *SettingsModel) followCursor() {
-	content, selectedLine := s.renderContent()
+	content, selectedLine, _ := s.renderContent()
 	// Persist the content into the real model's viewport (a pointer
 	// receiver, unlike View's) so maxYOffset reflects the actual line
 	// count - otherwise SetYOffset below always clamps back to 0.
