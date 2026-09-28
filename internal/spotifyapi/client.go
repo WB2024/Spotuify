@@ -33,25 +33,30 @@ type Client struct {
 	// limit is an undocumented rolling window per app; this is a polite
 	// default, not a guarantee - and not a static one: slowDown halves it
 	// every time a 429 actually comes back, since that's Spotify directly
-	// saying the current rate is too fast. A batch across a few hundred
-	// playlists (~400-500+ requests) has been observed tripping a real,
-	// multi-hour lockout at the previous fixed ~6-7 req/s, so starting
-	// more conservative and backing off further from there beats guessing
-	// a single static number that's still too fast.
+	// saying the current rate is too fast.
+	//
+	// This has been lowered twice now, both times after a real, observed
+	// multi-hour lockout: ~6-7 req/s tripped one across ~400-500 requests,
+	// and even the more conservative ~2.5 req/s that replaced it still
+	// tripped a fresh one on a ~190-playlist catch-up batch. Given two
+	// separate "conservative-looking" numbers have both still been too
+	// fast in practice, this errs considerably further toward slow rather
+	// than guess at a third number - a batch taking several extra minutes
+	// is a much smaller cost than another hours-long lockout.
 	limiter *rate.Limiter
 }
 
 // minLimit is the slowest slowDown will ever throttle down to - about one
-// request every 4 seconds. Slow enough to almost never be the cause of a
+// request every 8 seconds. Slow enough to almost never be the cause of a
 // 429, but still finite so a very large batch doesn't effectively stall.
-const minLimit = rate.Limit(1.0 / 4.0)
+const minLimit = rate.Limit(1.0 / 8.0)
 
 // New wraps an OAuth-authenticated http.Client (see internal/auth) for use
 // against the Spotify Web API.
 func New(httpClient *http.Client) *Client {
 	return &Client{
 		http:    httpClient,
-		limiter: rate.NewLimiter(rate.Every(400*time.Millisecond), 3), // ~2.5 req/s steady, small burst
+		limiter: rate.NewLimiter(rate.Every(1200*time.Millisecond), 2), // ~0.8 req/s steady, small burst
 	}
 }
 

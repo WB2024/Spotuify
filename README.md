@@ -659,35 +659,48 @@ Spotify doesn't publish a fixed requests/second number — it enforces a
 rolling per-app limit and returns `429` with a `Retry-After` header when
 you exceed it
 (docs: https://developer.spotify.com/documentation/web-api/concepts/rate-limits).
-Spotuify self-throttles to a conservative steady rate, and halves that rate
-every time a `429` actually comes back — getting one at all means the
-current rate is too fast, so it backs off further rather than resuming at
-the exact rate that just tripped it, down to a floor of one request per 4
-seconds. On a `429` with a short `Retry-After` (a genuinely momentary
-burst), it sleeps that out and retries transparently. A `Retry-After`
-longer than 20 seconds means the app is properly rate-limited, not just
-momentarily over a burst — Spotify has been observed returning waits of
-several *hours* at that point — so instead of silently blocking the UI for
-however long that is, the whole batch (every playlist still queued, not
-just the one that hit it) stops immediately with a clear "rate limited by
-Spotify until ..." error, rather than grinding through the rest of a large
-queue making the exact same doomed request over and over. Matching or
-exporting a very large number of playlists in one batch (e.g. select-all
-across a 400+ playlist library) is what's most likely to trigger this in
-the first place; if a batch run comes back with playlists failed that way,
-re-running just those after that time will pick them up — no need to redo
-the whole batch, and anything already written is untouched. Playlists that
-failed show a count and are listed first, ahead of the (potentially very
-long, for a big batch) per-playlist success list. Export Playlists' own
-`Missing` filter (see above) makes that catch-up run concrete: filter to
-it, select-all, export — that's exactly the playlists that didn't get
-attempted or failed last time, nothing more.
+Spotuify self-throttles to a conservative steady rate (~0.8 requests/sec by
+default — lowered twice now, both times after a real observed multi-hour
+lockout at what had looked like a conservative-enough number before), and
+halves that rate every time a `429` actually comes back — getting one at
+all means the current rate is too fast, so it backs off further rather
+than resuming at the exact rate that just tripped it, down to a floor of
+one request per 8 seconds. On a `429` with a short `Retry-After` (a
+genuinely momentary burst), it sleeps that out and retries transparently.
+A `Retry-After` longer than 20 seconds means the app is properly
+rate-limited, not just momentarily over a burst — Spotify has been
+observed returning waits of several *hours* at that point — so instead of
+silently blocking the UI for however long that is, the whole batch (every
+playlist still queued, not just the one that hit it) stops immediately
+with a clear "rate limited by Spotify until ..." error, rather than
+grinding through the rest of a large queue making the exact same doomed
+request over and over. Matching or exporting a very large number of
+playlists in one batch (e.g. select-all across a 400+ playlist library, or
+even a ~200-playlist catch-up run) is what's most likely to trigger this
+in the first place; if a batch run comes back with playlists failed that
+way, re-running just those after that time will pick them up — no need to
+redo the whole batch, and anything already written is untouched.
+Playlists that failed show a count and are listed first, ahead of the
+(potentially very long, for a big batch) per-playlist success list.
+Export Playlists' own `Missing` filter (see above) makes that catch-up
+run concrete: filter to it, select-all, export — that's exactly the
+playlists that didn't get attempted or failed last time, nothing more.
 
 For a very large library, the most effective way to avoid tripping this at
 all is exporting everything first (Export Playlists, select all) and then
 matching — Match to Local Library reuses each playlist's export instead of
 fetching it from Spotify again (see above), so only playlists with no
 export on disk spend any API calls during the match run.
+
+**A `403 Forbidden` on a specific playlist is a different thing entirely**
+— not rate limiting (that's always `429`), but Spotify saying the app
+doesn't have permission to read that one playlist's tracks, for reasons
+outside this app's control (observed on old, personal playlists — the
+exact cause wasn't pinned down, but it's playlist-specific, not
+account-wide: matching/exporting the rest of the library is unaffected).
+It fails just that one playlist and moves on to the next without
+retrying — no special handling needed, and it doesn't interact with or
+contribute to rate limiting.
 
 ## A note on API access
 

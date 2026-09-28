@@ -26,8 +26,8 @@ func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.
 		full, err := client.Playlist(ctx, sp.ID)
 		if err != nil {
 			send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: err})
-			if _, locked := spotifyapi.AsRateLimitError(err); locked {
-				skipRest(ctx, ch, queue[i+1:], err)
+			if rl, locked := spotifyapi.AsRateLimitError(err); locked {
+				skipRest(ctx, ch, queue[i+1:], rl)
 				return
 			}
 			continue
@@ -38,8 +38,8 @@ func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.
 		})
 		if err != nil {
 			send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: err})
-			if _, locked := spotifyapi.AsRateLimitError(err); locked {
-				skipRest(ctx, ch, queue[i+1:], err)
+			if rl, locked := spotifyapi.AsRateLimitError(err); locked {
+				skipRest(ctx, ch, queue[i+1:], rl)
 				return
 			}
 			continue
@@ -69,10 +69,14 @@ func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.
 // same rate-limit error that just stopped it, without making any more
 // requests - every one of them would hit the exact same lockout, so
 // there's nothing to gain by trying each in turn and a real cost (more
-// load on an API that just said to back off).
-func skipRest(ctx context.Context, ch chan<- exportEvent, rest []spotifyapi.SimplifiedPlaylist, err error) {
+// load on an API that just said to back off). Takes the unwrapped
+// *RateLimitError specifically, not the original wrapped error (e.g.
+// "fetching tracks for playlist <id>: rate limited...") - that prefix names
+// whichever single playlist actually triggered the lockout, which is
+// misleading repeated verbatim across every other playlist in rest.
+func skipRest(ctx context.Context, ch chan<- exportEvent, rest []spotifyapi.SimplifiedPlaylist, rl *spotifyapi.RateLimitError) {
 	for _, sp := range rest {
-		send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: err})
+		send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: rl})
 	}
 }
 

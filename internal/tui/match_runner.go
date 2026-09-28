@@ -94,8 +94,8 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			full, err = client.Playlist(ctx, sp.ID)
 			if err != nil {
 				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: err})
-				if _, locked := spotifyapi.AsRateLimitError(err); locked {
-					skipRestMatch(ctx, ch, queue[i+1:], err)
+				if rl, locked := spotifyapi.AsRateLimitError(err); locked {
+					skipRestMatch(ctx, ch, queue[i+1:], rl)
 					return
 				}
 				continue
@@ -106,8 +106,8 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			})
 			if err != nil {
 				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: err})
-				if _, locked := spotifyapi.AsRateLimitError(err); locked {
-					skipRestMatch(ctx, ch, queue[i+1:], err)
+				if rl, locked := spotifyapi.AsRateLimitError(err); locked {
+					skipRestMatch(ctx, ch, queue[i+1:], rl)
 					return
 				}
 				continue
@@ -194,10 +194,14 @@ func waitForMatchEvent(ch <-chan matchEvent) tea.Cmd {
 
 // skipRestMatch marks every not-yet-attempted playlist in the batch with
 // the same rate-limit error that just stopped it, without making any more
-// requests - see skipRest in export_runner.go for why.
-func skipRestMatch(ctx context.Context, ch chan<- matchEvent, rest []spotifyapi.SimplifiedPlaylist, err error) {
+// requests - see skipRest in export_runner.go for why. Takes the unwrapped
+// *RateLimitError specifically, not the original wrapped error (e.g.
+// "fetching tracks for playlist <id>: rate limited...") - that prefix names
+// whichever single playlist actually triggered the lockout, which is
+// misleading repeated verbatim across every other playlist in rest.
+func skipRestMatch(ctx context.Context, ch chan<- matchEvent, rest []spotifyapi.SimplifiedPlaylist, rl *spotifyapi.RateLimitError) {
 	for _, sp := range rest {
-		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: err})
+		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: rl})
 	}
 }
 
