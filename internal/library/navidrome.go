@@ -92,7 +92,7 @@ type ndTagValue struct {
 // invoked during matching itself, scoped to just the tracks that need it).
 // It's cancelable via ctx.
 func Load(ctx context.Context, cfg LoadConfig, progress func(Progress)) (*Index, error) {
-	db, cleanup, err := openDB(ctx, cfg.NavidromeDBPath)
+	db, cleanup, err := OpenDB(ctx, cfg.NavidromeDBPath)
 	if err != nil {
 		return nil, err
 	}

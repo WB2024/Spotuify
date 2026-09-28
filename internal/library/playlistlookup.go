@@ -16,7 +16,7 @@ import (
 // hasn't scanned the file in yet — not a failure, just "not yet"; callers
 // matching right after writing a new file should poll.
 func LookupPlaylistIDByPath(ctx context.Context, dbPath, musicPath, localM3U8Path string) (string, bool, error) {
-	db, cleanup, err := openDB(ctx, dbPath)
+	db, cleanup, err := OpenDB(ctx, dbPath)
 	if err != nil {
 		return "", false, err
 	}

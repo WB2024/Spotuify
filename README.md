@@ -223,13 +223,14 @@ directory, the OAuth redirect port, whether cover art is downloaded, your
 Navidrome database path and music folder, the playlist output directory,
 the default Navidrome group (see below), the two matching toggles
 (MusicBrainz resolution, fuzzy matching), optionally a Navidrome server
-URL/username/password for cover-art upload, and optionally a Lidarr server
+URL/username/password for cover-art upload, optionally a Lidarr server
 URL/API key plus the root folder and quality/metadata profiles Lidarr needs
 (fetched from Lidarr itself: `enter` on one of those rows loads the choices,
-then cycles through them) and whether adds search immediately by default —
-all written back to `.env` on Save. Changing credentials or hitting "Log
-out" clears the cached session, so the next export/match re-triggers
-browser login.
+then cycles through them) and whether adds search immediately by default,
+and optionally Feishin's local storage path and server ID (see "Sorting
+Feishin's sidebar by creation date" below) — all written back to `.env` on
+Save. Changing credentials or hitting "Log out" clears the cached session,
+so the next export/match re-triggers browser login.
 
 ## What gets exported
 
@@ -477,6 +478,61 @@ Leave those fields blank to skip this entirely — the `.m3u8` and local
 `cover.jpg` still get written either way, the playlist just won't show
 art or a real description inside Navidrome/Feishin until you set them
 manually.
+
+### Sorting Feishin's sidebar by creation date
+
+Neither Spotify nor Navidrome expose a real "playlist created" date the way
+you might expect — Spotify's API has no such field at all (only per-track
+`added_at`), and Navidrome's own `created_at` normally just records when it
+first scanned a playlist's `.m3u8` in, not anything about the playlist's
+real history. Feishin's playlist list, in turn, has no sort option for
+creation date either — only name, recently added, recently played, or a
+manual drag-and-drop order (Settings › Sidebar › "Sidebar playlist
+sorting").
+
+Spotuify can drive that manual order directly, computed from whatever
+Navidrome actually has in its `created_at` column for each playlist —
+useful once that column reflects something real (this project's own
+history: a one-off backfill set it from each playlist's earliest track
+`added_at`, the closest thing to a real creation date that exists anywhere
+in this pipeline). Feishin stores its manual order as a plain JSON array of
+playlist IDs in its own local settings (Chromium's LevelDB-backed
+`localStorage`, under the key `playlist_order:<serverId>:owned` — the exact
+key its own drag-and-drop reordering writes to, reverse-engineered from
+Feishin's source and confirmed against its actual stored bytes rather than
+guessed at), not in Navidrome itself — so this only affects what *you* see
+locally in Feishin, nothing server-side.
+
+**Setup** (Settings › Feishin, optional):
+- **Feishin local storage path** — Feishin's `Local Storage/leveldb`
+  directory (part of its Chromium profile; for a Flatpak install this is
+  `~/.var/app/org.jeffvli.feishin/config/feishin/Local Storage/leveldb`).
+- **Feishin server ID** — the ID Feishin generated for this Navidrome
+  connection when you added it. Findable in that same local storage (or
+  Feishin's `config.json`, under a `server` object) with a bit of digging;
+  there's no UI for it in Feishin itself.
+- Also needs **Navidrome username** (above, in "Navidrome Cover Art
+  Upload") set, to know whose playlists to order.
+
+**Using it:** once those are saved, **"Sync Feishin playlist order now"**
+in Settings runs it on demand, and it also runs automatically once at the
+end of every batch match (silently on success; a failure shows as a
+warning on the Done screen rather than failing the match). **Feishin must
+be closed** for either to work — LevelDB allows only one writer, checked
+directly against Feishin's own lock (an `fcntl` probe on its `LOCK` file,
+not just assumed safe: an early version of this trusted LevelDB's
+single-writer guarantee to make a bad write fail on its own, which turned
+out wrong — goleveldb and Feishin's own Chromium LevelDB enforce that
+guarantee with different, mutually invisible OS locks, so a naive open
+could and did succeed while Feishin still had the database open). If
+Feishin's open, the sync fails immediately with a clear message instead of
+touching anything.
+
+This is a snapshot each time it runs, not a live rule: a playlist created
+after the last sync has no entry in the saved order, so Feishin's own
+fallback just appends it to the end of the sidebar rather than slotting it
+in chronologically — re-running the sync (or letting the next match run do
+it automatically) picks it up correctly from then on.
 
 ### Re-running a match: updates, not duplicates
 

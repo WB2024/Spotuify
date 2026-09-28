@@ -203,6 +203,7 @@ type MatchModel struct {
 	runs          []*playlistRun
 	queueLen      int
 	queueDone     int
+	feishinWarn   string // non-fatal: Feishin playlist order sync failed for this batch, if it was attempted
 
 	// allTrackRefs is every matched track in this batch, independent of
 	// methodFilter; trackRefs is the currently-visible (filtered) subset
@@ -1015,6 +1016,7 @@ func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchA
 
 	case matchEventAllDone:
 		m.state = matchStateDone
+		m.feishinWarn = ev.feishinWarn
 		if len(m.trackRefs) > 0 {
 			m.tbl.SetCursor(0)
 		}
@@ -1182,6 +1184,9 @@ func (m MatchModel) viewDone() string {
 
 	if m.editErr != "" {
 		b.WriteString("\n" + errorStyle.Render(m.editErr))
+	}
+	if m.feishinWarn != "" {
+		b.WriteString("\n" + warnStyle.Render(m.feishinWarn))
 	}
 	b.WriteString("\n\n")
 	b.WriteString(m.viewOutcomes())

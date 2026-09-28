@@ -9,6 +9,7 @@ import (
 
 	"spotuify/internal/config"
 	"spotuify/internal/export"
+	"spotuify/internal/feishin"
 	"spotuify/internal/library"
 	"spotuify/internal/m3u8"
 	"spotuify/internal/match"
@@ -36,6 +37,7 @@ type matchEvent struct {
 	err          error  // fetch/write failure for this playlist, if any
 	syncWarn     string // non-fatal: cover art written locally but not uploaded to Navidrome
 	reportWarn   string // non-fatal: match-report.csv couldn't be written
+	feishinWarn  string // non-fatal: Feishin playlist order sync failed (for matchEventAllDone)
 }
 
 // runMatch fetches full track listings for each queued playlist, matches
@@ -154,7 +156,20 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, playlist: full, results: results, write: writeRes, syncWarn: syncWarn, reportWarn: reportWarn})
 	}
 
-	sendMatchEvent(ctx, ch, matchEvent{kind: matchEventAllDone})
+	var feishinWarn string
+	if cfg.HasFeishinSync() {
+		// Once per batch, not once per playlist - it's a single, whole-
+		// library ordering, not a per-playlist concept. Silent on success
+		// (matching syncWarn/reportWarn's convention elsewhere in this
+		// file: only surfaced when something needs the user's attention),
+		// most commonly because Feishin was open at the time - see
+		// internal/feishin's checkNotRunning for why that's checked
+		// directly rather than assumed safe to just attempt.
+		if err := feishin.SyncPlaylistOrder(ctx, cfg.NavidromeDBPath, cfg.NavidromeUsername, cfg.FeishinLocalStoragePath, cfg.FeishinServerID); err != nil {
+			feishinWarn = "Feishin sync: " + err.Error()
+		}
+	}
+	sendMatchEvent(ctx, ch, matchEvent{kind: matchEventAllDone, feishinWarn: feishinWarn})
 }
 
 // resolveGroup returns the Navidrome group (the #PLAYLIST directive prefix)

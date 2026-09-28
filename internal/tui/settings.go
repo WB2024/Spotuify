@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"spotuify/internal/config"
+	"spotuify/internal/feishin"
 	"spotuify/internal/lidarrapi"
 )
 
@@ -34,6 +35,8 @@ const (
 	rowNavidromeAPIPassword
 	rowLidarrURL
 	rowLidarrAPIKey
+	rowFeishinLocalStoragePath
+	rowFeishinServerID
 	numTextRows // marks the end of the text-input rows (see inputs array)
 
 	rowDownloadCovers
@@ -47,6 +50,7 @@ const (
 	rowLidarrMetadataProfile
 	rowLidarrAddSearch
 
+	rowFeishinSync
 	rowLogout
 	rowSave
 	rowBack
@@ -126,6 +130,8 @@ func newSettings(cfg *config.Config) SettingsModel {
 	inputs[rowNavidromeAPIPassword] = mk("(not set — cover art upload skipped)", cfg.NavidromePassword, true)
 	inputs[rowLidarrURL] = mk("http://lidarr.example.com:8686 — leave blank to disable", cfg.LidarrURL, false)
 	inputs[rowLidarrAPIKey] = mk("Lidarr API key (Settings › General in Lidarr)", cfg.LidarrAPIKey, true)
+	inputs[rowFeishinLocalStoragePath] = mk("~/.var/app/org.jeffvli.feishin/config/feishin/Local Storage/leveldb — leave blank to disable", cfg.FeishinLocalStoragePath, false)
+	inputs[rowFeishinServerID] = mk("Feishin's ID for this Navidrome connection", cfg.FeishinServerID, false)
 
 	vp := viewport.New(0, 0)
 
@@ -153,6 +159,17 @@ type lidarrOptions struct {
 type lidarrOptionsMsg struct {
 	opts *lidarrOptions
 	err  error
+}
+
+type feishinSyncMsg struct {
+	err error
+}
+
+func syncFeishinPlaylistOrder(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		err := feishin.SyncPlaylistOrder(context.Background(), cfg.NavidromeDBPath, cfg.NavidromeUsername, cfg.FeishinLocalStoragePath, cfg.FeishinServerID)
+		return feishinSyncMsg{err: err}
+	}
 }
 
 func fetchLidarrOptions(url, apiKey string) tea.Cmd {
@@ -362,6 +379,16 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd, settingsActi
 		s.statusErr = false
 		return s, nil, settingsNone
 	}
+	if fm, ok := msg.(feishinSyncMsg); ok {
+		if fm.err != nil {
+			s.status = "Feishin sync: " + fm.err.Error()
+			s.statusErr = true
+		} else {
+			s.status = "Feishin playlist order synced."
+			s.statusErr = false
+		}
+		return s, nil, settingsNone
+	}
 	if s.editing {
 		var cmd tea.Cmd
 		s.inputs[s.cursor], cmd = s.inputs[s.cursor].Update(msg)
@@ -453,6 +480,16 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 		case s.isLidarrOptionRow(s.cursor):
 			return s, s.cycleLidarrOption(s.cursor), settingsNone
 
+		case s.cursor == rowFeishinSync:
+			if !s.cfg.HasFeishinSync() {
+				s.status = "Set Feishin's local storage path, server ID, and Navidrome username first."
+				s.statusErr = true
+				return s, nil, settingsNone
+			}
+			s.status = "Syncing Feishin playlist order..."
+			s.statusErr = false
+			return s, syncFeishinPlaylistOrder(s.cfg), settingsNone
+
 		case s.cursor == rowLogout:
 			s.doLogout()
 			return s, nil, settingsClientInvalidated
@@ -531,6 +568,8 @@ func (s *SettingsModel) doSave() bool {
 	s.cfg.LidarrQualityProfileID = s.lidarrQualityID
 	s.cfg.LidarrMetadataProfileID = s.lidarrMetadataID
 	s.cfg.LidarrAddAndSearch = s.lidarrAddSearch
+	s.cfg.FeishinLocalStoragePath = strings.TrimSpace(s.inputs[rowFeishinLocalStoragePath].Value())
+	s.cfg.FeishinServerID = strings.TrimSpace(s.inputs[rowFeishinServerID].Value())
 
 	if err := s.cfg.Save(); err != nil {
 		s.status = "Save failed: " + err.Error()
@@ -660,6 +699,11 @@ func (s SettingsModel) renderContent() (string, int) {
 		toggleRow(body, rowLidarrAddSearch, "Add + search by default (off = add only, Lidarr searches on its own schedule) — overridable per add with s", s.lidarrAddSearch)
 	})
 
+	group("Feishin (optional)", func(body *strings.Builder) {
+		textRow(body, rowFeishinLocalStoragePath, "Feishin local storage path", "Feishin's \"Local Storage/leveldb\" directory — lets Spotuify drive its manual playlist order, since Feishin itself can't sort by creation date")
+		textRow(body, rowFeishinServerID, "Feishin server ID", "The ID Feishin assigned this Navidrome connection — found in that same local storage or Feishin's config.json")
+	})
+
 	actionRow := func(idx settingsRow, label string, style lipgloss.Style) string {
 		selected := s.cursor == idx
 		marker := "  "
@@ -672,6 +716,8 @@ func (s SettingsModel) renderContent() (string, int) {
 		}
 		return mark + labelStyle.Render(marker+label)
 	}
+
+	b.WriteString(actionRow(rowFeishinSync, "Sync Feishin playlist order now", accentStyle) + "\n\n")
 
 	actions := lipgloss.JoinHorizontal(lipgloss.Top,
 		actionRow(rowLogout, "Log out", warnStyle),

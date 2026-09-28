@@ -28,7 +28,12 @@ import (
 // any temp copy — always call it, even on error paths that don't reach it
 // (there are none: on error this returns before creating anything to clean
 // up).
-func openDB(ctx context.Context, dbPath string) (*sql.DB, func(), error) {
+//
+// Exported (despite the internal/ package) so other packages that need
+// direct, read-only access to Navidrome's database - e.g. internal/feishin,
+// which isn't otherwise part of the library index - get this same
+// WAL/permission-aware handling instead of a second, more naive copy of it.
+func OpenDB(ctx context.Context, dbPath string) (*sql.DB, func(), error) {
 	db, directErr := tryOpen(ctx, dbPath)
 	if directErr == nil {
 		return db, func() { db.Close() }, nil

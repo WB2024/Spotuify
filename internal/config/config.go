@@ -128,6 +128,20 @@ type Config struct {
 	// lookups are cached between runs (see ResolveMusicBrainzISRC).
 	LibraryCachePath string
 
+	// FeishinLocalStoragePath and FeishinServerID enable syncing Navidrome's
+	// playlist order (see internal/feishin) into Feishin's own sidebar -
+	// Feishin has no UI option to sort its playlist list by creation date,
+	// only its manual drag-and-drop order, so this drives that order
+	// directly. FeishinLocalStoragePath is Feishin's "Local Storage/leveldb"
+	// directory (part of its Chromium profile, e.g.
+	// ~/.var/app/org.jeffvli.feishin/config/feishin/Local Storage/leveldb
+	// for a Flatpak install); FeishinServerID is the ID Feishin assigned
+	// this Navidrome connection when it was added, findable in that same
+	// local storage or its config.json. Left blank, this feature is
+	// unavailable — matching and everything else works the same either way.
+	FeishinLocalStoragePath string
+	FeishinServerID         string
+
 	// EnvPath is where Save writes settings back to. It's the same .env
 	// file Load reads from.
 	EnvPath string
@@ -154,6 +168,8 @@ const (
 	envLidarrQualityID  = "SPOTUIFY_LIDARR_QUALITY_PROFILE_ID"
 	envLidarrMetadataID = "SPOTUIFY_LIDARR_METADATA_PROFILE_ID"
 	envLidarrAddSearch  = "SPOTUIFY_LIDARR_ADD_AND_SEARCH"
+	envFeishinLSPath    = "SPOTUIFY_FEISHIN_LOCALSTORAGE_PATH"
+	envFeishinServerID  = "SPOTUIFY_FEISHIN_SERVER_ID"
 )
 
 const defaultRedirectPort = 8080
@@ -243,6 +259,8 @@ func Load() (*Config, error) {
 		LidarrAddAndSearch:      lidarrAddSearch,
 		TokenCachePath:          tokenPath,
 		LibraryCachePath:        libraryCachePath,
+		FeishinLocalStoragePath: os.Getenv(envFeishinLSPath),
+		FeishinServerID:         os.Getenv(envFeishinServerID),
 		EnvPath:                 envPath,
 	}, nil
 }
@@ -322,6 +340,14 @@ func (c *Config) HasNavidromeAPI() bool {
 	return c.NavidromeAPIURL != "" && c.NavidromeUsername != "" && c.NavidromePassword != ""
 }
 
+// HasFeishinSync reports whether enough is set to sync Navidrome's playlist
+// order into Feishin's sidebar (see internal/feishin). Also needs
+// NavidromeUsername (used elsewhere for cover-art upload) to know whose
+// playlists to order.
+func (c *Config) HasFeishinSync() bool {
+	return c.FeishinLocalStoragePath != "" && c.FeishinServerID != "" && c.NavidromeUsername != ""
+}
+
 // HasLidarr reports whether a Lidarr server is configured well enough to
 // talk to (URL + API key). Adding an artist Lidarr doesn't have yet also
 // needs LidarrRootFolder and the two profile IDs — see ValidateLidarr.
@@ -374,6 +400,8 @@ func (c *Config) Save() error {
 		{envLidarrQualityID, strconv.Itoa(c.LidarrQualityProfileID)},
 		{envLidarrMetadataID, strconv.Itoa(c.LidarrMetadataProfileID)},
 		{envLidarrAddSearch, strconv.FormatBool(c.LidarrAddAndSearch)},
+		{envFeishinLSPath, c.FeishinLocalStoragePath},
+		{envFeishinServerID, c.FeishinServerID},
 	}
 	return upsertEnvFile(c.EnvPath, values)
 }
