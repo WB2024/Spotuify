@@ -22,9 +22,10 @@ import (
 const localStorageOrigin = "file://"
 
 // SyncPlaylistOrder writes every playlist Navidrome has for ownerUsername,
-// ordered by created_at ascending, into Feishin's own manual sidebar order
-// - the exact localStorage key ("playlist_order:<serverID>:owned") Feishin's
-// own drag-and-drop reordering writes to (see sidebar-playlist-list.tsx in
+// ordered by created_at (oldest first, unless descending is set), into
+// Feishin's own manual sidebar order - the exact localStorage key
+// ("playlist_order:<serverID>:owned") Feishin's own drag-and-drop
+// reordering writes to (see sidebar-playlist-list.tsx in
 // https://github.com/jeffvli/feishin). serverID is the nanoid Feishin
 // assigned this Navidrome connection when it was added (Settings ›
 // Feishin server ID); leveldbPath is Feishin's "Local Storage/leveldb"
@@ -39,12 +40,12 @@ const localStorageOrigin = "file://"
 // database here would not, on its own, fail just because Feishin already
 // has it open - see checkNotRunning's own doc comment for what actually
 // happened when this package relied on that assumption.
-func SyncPlaylistOrder(ctx context.Context, navidromeDBPath, ownerUsername, leveldbPath, serverID string) error {
+func SyncPlaylistOrder(ctx context.Context, navidromeDBPath, ownerUsername, leveldbPath, serverID string, descending bool) error {
 	if err := checkNotRunning(leveldbPath); err != nil {
 		return err
 	}
 
-	ids, err := orderedPlaylistIDs(ctx, navidromeDBPath, ownerUsername)
+	ids, err := orderedPlaylistIDs(ctx, navidromeDBPath, ownerUsername, descending)
 	if err != nil {
 		return fmt.Errorf("reading playlist order from Navidrome: %w", err)
 	}
@@ -85,23 +86,30 @@ func chromiumLocalStorageKey(key string) []byte {
 }
 
 // orderedPlaylistIDs returns ownerUsername's playlist IDs from Navidrome's
-// own database, oldest created_at first. Read-only, via library.OpenDB -
-// the same WAL/permission-aware opener the library index uses, so this
-// behaves the same way whether Navidrome's database sits on a NAS, is
-// mid-write, or is owned by a different user.
-func orderedPlaylistIDs(ctx context.Context, dbPath, ownerUsername string) ([]string, error) {
+// own database, by created_at - oldest first, unless descending is set.
+// Read-only, via library.OpenDB - the same WAL/permission-aware opener the
+// library index uses, so this behaves the same way whether Navidrome's
+// database sits on a NAS, is mid-write, or is owned by a different user.
+func orderedPlaylistIDs(ctx context.Context, dbPath, ownerUsername string, descending bool) ([]string, error) {
 	db, cleanup, err := library.OpenDB(ctx, dbPath)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
+	// descending picks between two fixed literals, never interpolates
+	// caller-supplied text - safe despite not being a placeholder param,
+	// since ORDER BY direction can't be parameterized like a value can.
+	direction := "ASC"
+	if descending {
+		direction = "DESC"
+	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT p.id
 		FROM playlist p
 		JOIN user u ON p.owner_id = u.id
 		WHERE u.user_name = ?
-		ORDER BY p.created_at ASC`, ownerUsername)
+		ORDER BY p.created_at `+direction, ownerUsername)
 	if err != nil {
 		return nil, err
 	}

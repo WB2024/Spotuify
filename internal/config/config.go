@@ -142,6 +142,12 @@ type Config struct {
 	FeishinLocalStoragePath string
 	FeishinServerID         string
 
+	// FeishinSortDescending controls the direction Navidrome's playlist
+	// order is read in before being written into Feishin's sidebar order
+	// (see internal/feishin): false (the default) is oldest first, true is
+	// newest first.
+	FeishinSortDescending bool
+
 	// EnvPath is where Save writes settings back to. It's the same .env
 	// file Load reads from.
 	EnvPath string
@@ -170,6 +176,7 @@ const (
 	envLidarrAddSearch  = "SPOTUIFY_LIDARR_ADD_AND_SEARCH"
 	envFeishinLSPath    = "SPOTUIFY_FEISHIN_LOCALSTORAGE_PATH"
 	envFeishinServerID  = "SPOTUIFY_FEISHIN_SERVER_ID"
+	envFeishinSortDesc  = "SPOTUIFY_FEISHIN_SORT_DESCENDING"
 )
 
 const defaultRedirectPort = 8080
@@ -210,6 +217,7 @@ func Load() (*Config, error) {
 	downloadCovers := parseBoolDefault(os.Getenv(envDownloadArt), true)
 	resolveMBISRC := parseBoolDefault(os.Getenv(envResolveMBISRC), true)
 	enableFuzzy := parseBoolDefault(os.Getenv(envEnableFuzzy), true)
+	feishinSortDesc := parseBoolDefault(os.Getenv(envFeishinSortDesc), false)
 
 	m3u8Dir := os.Getenv(envM3U8Dir)
 	if m3u8Dir == "" {
@@ -261,6 +269,7 @@ func Load() (*Config, error) {
 		LibraryCachePath:        libraryCachePath,
 		FeishinLocalStoragePath: os.Getenv(envFeishinLSPath),
 		FeishinServerID:         os.Getenv(envFeishinServerID),
+		FeishinSortDescending:   feishinSortDesc,
 		EnvPath:                 envPath,
 	}, nil
 }
@@ -402,6 +411,7 @@ func (c *Config) Save() error {
 		{envLidarrAddSearch, strconv.FormatBool(c.LidarrAddAndSearch)},
 		{envFeishinLSPath, c.FeishinLocalStoragePath},
 		{envFeishinServerID, c.FeishinServerID},
+		{envFeishinSortDesc, strconv.FormatBool(c.FeishinSortDescending)},
 	}
 	return upsertEnvFile(c.EnvPath, values)
 }

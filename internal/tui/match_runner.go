@@ -165,7 +165,7 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 		// most commonly because Feishin was open at the time - see
 		// internal/feishin's checkNotRunning for why that's checked
 		// directly rather than assumed safe to just attempt.
-		if err := feishin.SyncPlaylistOrder(ctx, cfg.NavidromeDBPath, cfg.NavidromeUsername, cfg.FeishinLocalStoragePath, cfg.FeishinServerID); err != nil {
+		if err := feishin.SyncPlaylistOrder(ctx, cfg.NavidromeDBPath, cfg.NavidromeUsername, cfg.FeishinLocalStoragePath, cfg.FeishinServerID, cfg.FeishinSortDescending); err != nil {
 			feishinWarn = "Feishin sync: " + err.Error()
 		}
 	}

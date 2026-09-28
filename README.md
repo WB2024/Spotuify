@@ -523,6 +523,9 @@ locally in Feishin, nothing server-side.
   there's no UI for it in Feishin itself.
 - Also needs **Navidrome username** (above, in "Navidrome Cover Art
   Upload") set, to know whose playlists to order.
+- **Sort newest first** — off (the default) puts the oldest playlist at
+  the top of the sidebar, like a chronological history; on reverses it, so
+  whatever you created most recently sits at the top instead.
 
 **Using it:** once those are saved, **"Sync Feishin playlist order now"**
 in Settings runs it on demand, and it also runs automatically once at the

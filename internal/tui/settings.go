@@ -50,6 +50,7 @@ const (
 	rowLidarrMetadataProfile
 	rowLidarrAddSearch
 
+	rowFeishinSortDescending
 	rowFeishinSync
 	rowLogout
 	rowSave
@@ -76,10 +77,11 @@ const (
 type SettingsModel struct {
 	cfg *config.Config
 
-	inputs         [numTextRows]textinput.Model // indexed by rowClientID..rowLidarrAPIKey
-	downloadCovers bool
-	resolveMBID    bool
-	fuzzyMatch     bool
+	inputs                [numTextRows]textinput.Model // indexed by rowClientID..rowLidarrAPIKey
+	downloadCovers        bool
+	resolveMBID           bool
+	fuzzyMatch            bool
+	feishinSortDescending bool
 
 	// Lidarr choices. The option lists are fetched from Lidarr on first use
 	// of one of its option rows (needs URL + API key filled in above them).
@@ -136,16 +138,17 @@ func newSettings(cfg *config.Config) SettingsModel {
 	vp := viewport.New(0, 0)
 
 	return SettingsModel{
-		cfg:              cfg,
-		inputs:           inputs,
-		downloadCovers:   cfg.DownloadCovers,
-		resolveMBID:      cfg.ResolveMusicBrainzISRC,
-		fuzzyMatch:       cfg.EnableFuzzyMatching,
-		lidarrRootFolder: cfg.LidarrRootFolder,
-		lidarrQualityID:  cfg.LidarrQualityProfileID,
-		lidarrMetadataID: cfg.LidarrMetadataProfileID,
-		lidarrAddSearch:  cfg.LidarrAddAndSearch,
-		viewport:         vp,
+		cfg:                   cfg,
+		inputs:                inputs,
+		downloadCovers:        cfg.DownloadCovers,
+		resolveMBID:           cfg.ResolveMusicBrainzISRC,
+		fuzzyMatch:            cfg.EnableFuzzyMatching,
+		feishinSortDescending: cfg.FeishinSortDescending,
+		lidarrRootFolder:      cfg.LidarrRootFolder,
+		lidarrQualityID:       cfg.LidarrQualityProfileID,
+		lidarrMetadataID:      cfg.LidarrMetadataProfileID,
+		lidarrAddSearch:       cfg.LidarrAddAndSearch,
+		viewport:              vp,
 	}
 }
 
@@ -167,7 +170,7 @@ type feishinSyncMsg struct {
 
 func syncFeishinPlaylistOrder(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		err := feishin.SyncPlaylistOrder(context.Background(), cfg.NavidromeDBPath, cfg.NavidromeUsername, cfg.FeishinLocalStoragePath, cfg.FeishinServerID)
+		err := feishin.SyncPlaylistOrder(context.Background(), cfg.NavidromeDBPath, cfg.NavidromeUsername, cfg.FeishinLocalStoragePath, cfg.FeishinServerID, cfg.FeishinSortDescending)
 		return feishinSyncMsg{err: err}
 	}
 }
@@ -520,7 +523,7 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 			cmd := s.inputs[s.cursor].Focus()
 			return s, cmd, settingsNone
 
-		case s.cursor == rowDownloadCovers, s.cursor == rowResolveMBID, s.cursor == rowFuzzyMatch, s.cursor == rowLidarrAddSearch:
+		case s.cursor == rowDownloadCovers, s.cursor == rowResolveMBID, s.cursor == rowFuzzyMatch, s.cursor == rowLidarrAddSearch, s.cursor == rowFeishinSortDescending:
 			s.toggle(s.cursor)
 			return s, nil, settingsNone
 
@@ -568,6 +571,8 @@ func (s *SettingsModel) toggle(row settingsRow) {
 		s.fuzzyMatch = !s.fuzzyMatch
 	case rowLidarrAddSearch:
 		s.lidarrAddSearch = !s.lidarrAddSearch
+	case rowFeishinSortDescending:
+		s.feishinSortDescending = !s.feishinSortDescending
 	}
 }
 
@@ -617,6 +622,7 @@ func (s *SettingsModel) doSave() bool {
 	s.cfg.LidarrAddAndSearch = s.lidarrAddSearch
 	s.cfg.FeishinLocalStoragePath = strings.TrimSpace(s.inputs[rowFeishinLocalStoragePath].Value())
 	s.cfg.FeishinServerID = strings.TrimSpace(s.inputs[rowFeishinServerID].Value())
+	s.cfg.FeishinSortDescending = s.feishinSortDescending
 
 	if err := s.cfg.Save(); err != nil {
 		s.status = "Save failed: " + err.Error()
@@ -747,6 +753,7 @@ func (s SettingsModel) renderContent() (string, int, map[settingsRow]int) {
 	group("Feishin (optional)", func(body *strings.Builder) {
 		textRow(body, rowFeishinLocalStoragePath, "Feishin local storage path", "Feishin's \"Local Storage/leveldb\" directory — lets Spotuify drive its manual playlist order, since Feishin itself can't sort by creation date")
 		textRow(body, rowFeishinServerID, "Feishin server ID", "The ID Feishin assigned this Navidrome connection — found in that same local storage or Feishin's config.json")
+		toggleRow(body, rowFeishinSortDescending, "Sort newest first (off = oldest first)", s.feishinSortDescending)
 	})
 
 	actionRow := func(idx settingsRow, label string, style lipgloss.Style) string {
