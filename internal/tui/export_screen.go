@@ -39,16 +39,35 @@ const (
 	exportActionBack
 )
 
+// exportStatusFilter narrows the playlist list to those that do/don't
+// already have a local export (playlist.json) — cycled with "m" — so
+// catching up on whatever's missing (e.g. after a batch run was cut short
+// by a Spotify rate limit) is a keypress away instead of eyeballing the
+// whole list or re-exporting everything from scratch.
+type exportStatusFilter int
+
+const (
+	exportFilterAll exportStatusFilter = iota
+	exportFilterMissing
+	exportFilterExported
+)
+
+func (f exportStatusFilter) next() exportStatusFilter {
+	return (f + 1) % 3
+}
+
 // playlistItem adapts a Spotify playlist to bubbles/list's Item interface,
 // tracking whether the user has checked it for a batch export/match.
 type playlistItem struct {
 	playlist spotifyapi.SimplifiedPlaylist
 	selected bool
 
-	// hasFile and group are Match-screen-only: whether this playlist
-	// already has a written .m3u8, and its resolved Navidrome group
-	// (override if set, else the global default). Export never sets
-	// these, so they're always zero-valued there and never shown.
+	// hasFile means "already has the on-disk artifact this screen cares
+	// about" — a written .m3u8 on the Match screen, a local export
+	// (playlist.json) on this one. group is Match-screen-only: the
+	// playlist's resolved Navidrome group (override if set, else the
+	// global default). Export never sets it, so it's always zero-valued
+	// here and never shown.
 	hasFile bool
 	group   string
 }
@@ -129,6 +148,13 @@ type ExportModel struct {
 	user *spotifyapi.User
 	err  error
 
+	// allPlaylists is every loaded playlist, independent of what
+	// statusFilter currently narrows e.list down to — selections and
+	// hasFile are tracked here so they survive switching filters, since
+	// e.list only ever holds whatever subset is currently visible.
+	allPlaylists []playlistItem
+	statusFilter exportStatusFilter
+
 	rows     []exportRow
 	events   chan exportEvent
 	queueLen int
@@ -185,7 +211,13 @@ func (e *ExportModel) SetSize(width, height int) {
 	if listW < 30 {
 		listW = width
 	}
-	e.list.SetSize(listW, contentHeight)
+	// -2: the status-filter chip row viewList draws above the list, plus
+	// its blank-line separator.
+	listHeight := contentHeight - 2
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	e.list.SetSize(listW, listHeight)
 
 	e.prog.Width = width - 4
 	if e.prog.Width < 10 {
@@ -283,11 +315,15 @@ func (e ExportModel) Update(msg tea.Msg) (ExportModel, tea.Cmd, exportAction) {
 
 	case playlistsLoadedMsg:
 		e.user = msg.user
-		items := make([]list.Item, len(msg.playlists))
+		exportsByID := export.ScanExports(e.cfg.ExportDir)
+		items := make([]playlistItem, len(msg.playlists))
 		for i, p := range msg.playlists {
-			items[i] = playlistItem{playlist: p}
+			_, hasExport := exportsByID[p.ID]
+			items[i] = playlistItem{playlist: p, hasFile: hasExport}
 		}
-		e.list.SetItems(items)
+		e.allPlaylists = items
+		e.statusFilter = exportFilterAll
+		e.applyStatusFilter()
 		e.state = exportStateList
 		return e, nil, exportActionNone
 
@@ -359,6 +395,7 @@ func (e ExportModel) handleKey(msg tea.KeyMsg) (ExportModel, tea.Cmd, exportActi
 			if it, ok := e.list.SelectedItem().(playlistItem); ok {
 				it.selected = !it.selected
 				e.list.SetItem(idx, it)
+				e.syncAllPlaylist(it)
 			}
 			return e, nil, exportActionNone
 		case key.Matches(msg, playlistListKeys.SelectAll):
@@ -374,7 +411,12 @@ func (e ExportModel) handleKey(msg tea.KeyMsg) (ExportModel, tea.Cmd, exportActi
 				p := it.(playlistItem)
 				p.selected = !allSelected
 				e.list.SetItem(i, p)
+				e.syncAllPlaylist(p)
 			}
+			return e, nil, exportActionNone
+		case key.Matches(msg, playlistListKeys.StatusFilter):
+			e.statusFilter = e.statusFilter.next()
+			e.applyStatusFilter()
 			return e, nil, exportActionNone
 		case key.Matches(msg, playlistListKeys.Export):
 			return e.startExport()
@@ -409,10 +451,73 @@ func (e ExportModel) handleKey(msg tea.KeyMsg) (ExportModel, tea.Cmd, exportActi
 	return e, nil, exportActionNone
 }
 
+// syncAllPlaylist writes it back into e.allPlaylists (matched by playlist
+// ID), so a selection toggle made while a status filter narrows the
+// visible list isn't lost when the filter changes again — e.list only ever
+// holds a subset, e.allPlaylists is the durable source of truth.
+func (e *ExportModel) syncAllPlaylist(it playlistItem) {
+	for i := range e.allPlaylists {
+		if e.allPlaylists[i].playlist.ID == it.playlist.ID {
+			e.allPlaylists[i] = it
+			return
+		}
+	}
+}
+
+// applyStatusFilter rebuilds e.list's visible items from e.allPlaylists
+// according to e.statusFilter.
+func (e *ExportModel) applyStatusFilter() {
+	visible := make([]list.Item, 0, len(e.allPlaylists))
+	for _, it := range e.allPlaylists {
+		switch e.statusFilter {
+		case exportFilterMissing:
+			if it.hasFile {
+				continue
+			}
+		case exportFilterExported:
+			if !it.hasFile {
+				continue
+			}
+		}
+		visible = append(visible, it)
+	}
+	e.list.SetItems(visible)
+}
+
+// renderStatusChips shows how many loaded playlists already have a local
+// export vs. don't, with the active statusFilter highlighted — both a
+// quick summary and a reminder that "m" cycles it.
+func (e ExportModel) renderStatusChips() string {
+	var exported, missing int
+	for _, p := range e.allPlaylists {
+		if p.hasFile {
+			exported++
+		} else {
+			missing++
+		}
+	}
+
+	chip := func(label string, count int, active bool) string {
+		text := fmt.Sprintf(" %s (%d) ", label, count)
+		if active {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(spotifyGreen).Bold(true).Render(text)
+		}
+		return dimStyle.Render(text)
+	}
+
+	return chip("All", len(e.allPlaylists), e.statusFilter == exportFilterAll) + " " +
+		chip("Exported", exported, e.statusFilter == exportFilterExported) + " " +
+		chip("Missing", missing, e.statusFilter == exportFilterMissing) + "   " +
+		fadedStyle.Render("m to cycle")
+}
+
+// startExport queues every checked playlist for export. Selections are
+// checked against the full set (e.allPlaylists), not just e.list's current
+// (possibly status-filtered) view — a playlist checked while filtered to
+// "Missing" stays queued even after switching back to "All".
 func (e ExportModel) startExport() (ExportModel, tea.Cmd, exportAction) {
 	var queue []spotifyapi.SimplifiedPlaylist
-	for _, it := range e.list.Items() {
-		p := it.(playlistItem)
+	for _, p := range e.allPlaylists {
 		if p.selected {
 			queue = append(queue, p.playlist)
 		}
@@ -540,6 +645,8 @@ func (e ExportModel) viewBatch(heading string) string {
 }
 
 func (e ExportModel) viewList() string {
+	chips := e.renderStatusChips() + "\n\n"
+
 	contentHeight := e.height - 6
 	if contentHeight < 5 {
 		contentHeight = 5
@@ -547,16 +654,15 @@ func (e ExportModel) viewList() string {
 
 	listW := (e.width * 3) / 5
 	if listW < 30 {
-		listW = e.width
-		return e.list.View()
+		return chips + e.list.View()
 	}
 	detailW := e.width - listW - 6
 	if detailW < 20 {
-		return e.list.View()
+		return chips + e.list.View()
 	}
 
 	detail := panelStyle.Width(detailW).Height(contentHeight - 2).Render(e.renderDetail(detailW - 2))
-	return lipgloss.JoinHorizontal(lipgloss.Top, e.list.View(), "  ", detail)
+	return chips + lipgloss.JoinHorizontal(lipgloss.Top, e.list.View(), "  ", detail)
 }
 
 func (e ExportModel) renderDetail(width int) string {

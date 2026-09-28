@@ -107,26 +107,27 @@ var settingsFieldEditKeys = settingsFieldEditKeyMap{
 // --- Export: playlist list ---
 
 type playlistListKeyMap struct {
-	Up, Down, Toggle, SelectAll, Export, Filter, Back, Help key.Binding
+	Up, Down, Toggle, SelectAll, Export, Filter, StatusFilter, Back, Help key.Binding
 }
 
 func (k playlistListKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Toggle, k.SelectAll, k.Export, k.Filter, k.Back, k.Help}
+	return []key.Binding{k.Toggle, k.SelectAll, k.Export, k.Filter, k.StatusFilter, k.Back, k.Help}
 }
 
 func (k playlistListKeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{k.Up, k.Down}, {k.Toggle, k.SelectAll}, {k.Export, k.Filter}, {k.Back, k.Help}}
+	return [][]key.Binding{{k.Up, k.Down}, {k.Toggle, k.SelectAll}, {k.Export, k.Filter}, {k.StatusFilter}, {k.Back, k.Help}}
 }
 
 var playlistListKeys = playlistListKeyMap{
-	Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-	Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-	Toggle:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
-	SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select all")),
-	Export:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "export")),
-	Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-	Back:      key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back")),
-	Help:      globalKeys.Help,
+	Up:           key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:         key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Toggle:       key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
+	SelectAll:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select all")),
+	Export:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "export")),
+	Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter by name")),
+	StatusFilter: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "cycle exported/missing")),
+	Back:         key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back")),
+	Help:         globalKeys.Help,
 }
 
 // --- Export: running / done / fatal ---

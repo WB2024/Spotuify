@@ -112,6 +112,16 @@ table also responds to the mouse wheel, in addition to the keyboard.
 - Arrow keys / `j`/`k` / mouse wheel — move through your playlists; the
   right-hand panel shows full details (owner, visibility, track count,
   description) for whichever playlist is highlighted
+- The playlist list marks each one that already has a local export
+  (`playlist.json` etc.) with a `✓ synced` tag, and a chip row above the
+  list (`All` / `Exported` / `Missing`, each with a live count) shows which
+  one is active — `m` cycles through them, so re-exporting just whatever a
+  previous batch didn't get to (e.g. one cut short by Spotify's rate limit)
+  is filter-to-"Missing", select-all, export — instead of redoing
+  everything or hand-picking around what's already there. Checking a
+  playlist (`space`) persists across filter changes, so you can filter to
+  "Missing", select-all (`a`), clear the filter, and still export exactly
+  what you selected.
 - `space` — check a playlist for batch export
 - `a` — select/deselect all
 - `enter` — export the checked playlists (or just the highlighted one, if
@@ -590,7 +600,10 @@ the first place; if a batch run comes back with playlists failed that way,
 re-running just those after that time will pick them up — no need to redo
 the whole batch, and anything already written is untouched. Playlists that
 failed show a count and are listed first, ahead of the (potentially very
-long, for a big batch) per-playlist success list.
+long, for a big batch) per-playlist success list. Export Playlists' own
+`Missing` filter (see above) makes that catch-up run concrete: filter to
+it, select-all, export — that's exactly the playlists that didn't get
+attempted or failed last time, nothing more.
 
 For a very large library, the most effective way to avoid tripping this at
 all is exporting everything first (Export Playlists, select all) and then
