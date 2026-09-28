@@ -35,6 +35,7 @@ type matchEvent struct {
 	write        *m3u8.Result
 	err          error  // fetch/write failure for this playlist, if any
 	syncWarn     string // non-fatal: cover art written locally but not uploaded to Navidrome
+	reportWarn   string // non-fatal: match-report.csv couldn't be written
 }
 
 // runMatch fetches full track listings for each queued playlist, matches
@@ -123,6 +124,15 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			continue
 		}
 
+		var reportWarn string
+		if err := match.WriteReport(writeRes.Dir, results, idx); err != nil {
+			// A report the user can't see is a much smaller problem than a
+			// missing .m3u8, so this is noted (surfaced the same way a
+			// Navidrome sync failure is, below) rather than failing the
+			// whole playlist over it.
+			reportWarn = "match-report.csv: " + err.Error()
+		}
+
 		var syncWarn string
 		hasSyncable := writeRes.CoverPath != "" || full.Description != ""
 		switch {
@@ -141,7 +151,7 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			syncWarn = "Navidrome server URL/username/password aren't set in Settings — cover art and description weren't uploaded"
 		}
 
-		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, playlist: full, results: results, write: writeRes, syncWarn: syncWarn})
+		sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, playlist: full, results: results, write: writeRes, syncWarn: syncWarn, reportWarn: reportWarn})
 	}
 
 	sendMatchEvent(ctx, ch, matchEvent{kind: matchEventAllDone})

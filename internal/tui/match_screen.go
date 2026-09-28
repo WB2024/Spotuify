@@ -141,6 +141,7 @@ type playlistOutcome struct {
 	total         int
 	err           error
 	navidromeSync string // non-empty: cover art/description not synced to Navidrome, and why
+	reportWarn    string // non-empty: match-report.csv couldn't be written, and why
 }
 
 // MatchModel is the "Match to Local Library" screen: it owns login, the
@@ -797,6 +798,9 @@ func (m MatchModel) applyManualMatch(path string) (MatchModel, tea.Cmd, matchAct
 	} else {
 		run.outcome.matched = res.Matched
 		run.outcome.dir = res.Dir
+		if err := match.WriteReport(res.Dir, run.results, m.library); err != nil {
+			run.outcome.reportWarn = "match-report.csv: " + err.Error()
+		}
 	}
 
 	m.tbl.SetRows(m.tableRows())
@@ -985,7 +989,7 @@ func (m MatchModel) handleMatchEvent(ev matchEvent) (MatchModel, tea.Cmd, matchA
 	case matchEventPlaylistDone:
 		m.currentStatus = ""
 		m.queueDone++
-		outcome := playlistOutcome{name: ev.playlistName, total: len(ev.results), navidromeSync: ev.syncWarn}
+		outcome := playlistOutcome{name: ev.playlistName, total: len(ev.results), navidromeSync: ev.syncWarn, reportWarn: ev.reportWarn}
 		if ev.err != nil {
 			outcome.err = ev.err
 		}
@@ -1307,6 +1311,9 @@ func (m MatchModel) viewOutcomes() string {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("%s: %d/%d matched → %s", o.name, o.matched, o.total, o.dir)) + "\n")
 		if o.navidromeSync != "" {
 			b.WriteString(warnStyle.Render(fmt.Sprintf("    Navidrome sync: %s", o.navidromeSync)) + "\n")
+		}
+		if o.reportWarn != "" {
+			b.WriteString(warnStyle.Render(fmt.Sprintf("    %s", o.reportWarn)) + "\n")
 		}
 	}
 	return b.String()

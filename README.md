@@ -411,6 +411,15 @@ For each playlist, under `<M3U8 output directory>/<playlist name>/`:
 - **`missing.txt`** — a human-readable list of anything that couldn't be
   matched (artist, title, album, Spotify link), only written if there's
   anything to report.
+- **`match-report.csv`** — one row per track: position, name, artists,
+  album, ISRC, match method (`isrc`/`fuzzy`/`manual`/`missing`),
+  confidence, the matched file's own embedded MusicBrainz Recording ID (if
+  it has one), the matched path (or `MISSING`), and the Spotify track ID.
+  This is a record of *why* a run came out the way it did, inspectable
+  outside the app — it's written fresh on every match (and every manual
+  correction), not read back by anything: MusicBrainz lookups are already
+  cached indefinitely elsewhere (see "The matching pipeline" below), so
+  this file being present or absent has no effect on how a re-run behaves.
 - **`cover.jpg`** — the playlist's cover art, same as the JSON/CSV export.
   This is a local file for browsing outside Navidrome; see below for
   getting it to show up *inside* Navidrome/Feishin's own UI.
