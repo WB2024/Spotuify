@@ -692,6 +692,18 @@ matching — Match to Local Library reuses each playlist's export instead of
 fetching it from Spotify again (see above), so only playlists with no
 export on disk spend any API calls during the match run.
 
+Pacing (the paragraph above) and request *volume* are separate levers, and
+slowing the pace down twice still hadn't been enough on its own — so
+Exporting and Matching both also now make one fewer Spotify request per
+playlist than before: `GET /playlists/{id}` (full playlist details) is
+skipped entirely, since the only thing it adds over the playlist listing
+already fetched in bulk, once, up front (`GET /me/playlists`) is a
+follower count this app never reads. Only `GET /playlists/{id}/items`
+(the actual track listing) is still fetched per playlist. This halves the
+request count for any playlist whose tracks fit in a single page, and
+meaningfully reduces it for larger ones — on top of (not instead of) the
+pacing and stop-on-lockout protections above.
+
 **A `403 Forbidden` on a specific playlist is a different thing entirely**
 — not rate limiting (that's always `429`), but Spotify saying the app
 doesn't have permission to read that one playlist's tracks, for reasons

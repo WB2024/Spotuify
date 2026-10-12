@@ -88,19 +88,19 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 		}
 
 		if full == nil {
-			sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: fetching playlist details...", sp.Name)})
+			// No separate GET /playlists/{id} call: that only adds a
+			// follower count over what /me/playlists already returned for
+			// every queued playlist up front (see sp, SimplifiedPlaylist)
+			// - nothing in this app ever reads it. Skipping it halves the
+			// request count for any playlist whose tracks fit in a single
+			// page, directly cutting how much a big batch asks of Spotify
+			// rather than just pacing it out more slowly (see
+			// maxRetryAfterWait's own history of that not being enough on
+			// its own).
+			full = &spotifyapi.FullPlaylist{SimplifiedPlaylist: sp}
 
+			sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: fetching tracks...", sp.Name)})
 			var err error
-			full, err = client.Playlist(ctx, sp.ID)
-			if err != nil {
-				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: err})
-				if rl, locked := spotifyapi.AsRateLimitError(err); locked {
-					skipRestMatch(ctx, ch, queue[i+1:], rl)
-					return
-				}
-				continue
-			}
-
 			tracks, err = client.PlaylistTracks(ctx, sp.ID, func(fetched, total int) {
 				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: fetched %d/%d tracks", sp.Name, fetched, total)})
 			})

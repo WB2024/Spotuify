@@ -37,17 +37,6 @@ func (c *Client) UserPlaylists(ctx context.Context) ([]SimplifiedPlaylist, error
 	return all, nil
 }
 
-// Playlist fetches full details (including follower count) for a single
-// playlist by ID.
-func (c *Client) Playlist(ctx context.Context, id string) (*FullPlaylist, error) {
-	var p FullPlaylist
-	path := fmt.Sprintf("/playlists/%s", url.PathEscape(id))
-	if err := c.get(ctx, path, &p); err != nil {
-		return nil, fmt.Errorf("fetching playlist %s: %w", id, err)
-	}
-	return &p, nil
-}
-
 // PlaylistTracks returns every track in a playlist, in playlist order,
 // paging through the full result set. Progress, if non-nil, is called after
 // each page with the number of items fetched so far and the total reported
