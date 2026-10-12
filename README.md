@@ -379,12 +379,25 @@ Matching is tiered, from most to least certain:
    wanted. Scoping it to the playlist being matched fixes that: matching a
    typical playlist costs, at most, a couple of minutes of MusicBrainz
    lookups instead. It's still rate-limited to MusicBrainz's documented 1
-   request/second and **cached indefinitely** (an ISRC's associated
-   recordings don't change) in `~/.cache/spotuify/mb_isrc_cache.json`,
-   flushed every 20 lookups so a cancelled run doesn't lose progress, and
-   `esc` cancels cleanly at any point. Turn off "Bridge via MusicBrainz..."
-   in Settings to skip this tier entirely and rely on direct ISRC tags +
-   fuzzy matching only.
+   request/second, but as of a batch "all playlists" match run turning out
+   to be painfully slow with thousands of tracks needing this tier at
+   once, each request now resolves up to 40 ISRCs at a time instead of
+   just one: MusicBrainz's recording search service accepts a Lucene query
+   like `isrc:A OR isrc:B OR ...` and, with `inc=isrcs`, returns each
+   matching recording's full ISRC list — intersected against the batch
+   requested to rebuild the same isrc → recording-IDs mapping one request
+   per ISRC would have, in the one request a batch still costs against the
+   1 request/second limit. Verified for real against the public API before
+   relying on it (MusicBrainz has no login/account, so unlike Spotify this
+   carries no lockout risk to verify against directly): a 40-ISRC batch of
+   real tracks resolved correctly in a single request. In practice this
+   turns bridging a few thousand unmatched tracks from the better part of
+   an hour into well under a minute of MusicBrainz calls. Results are
+   **cached indefinitely** (an ISRC's associated recordings don't change)
+   in `~/.cache/spotuify/mb_isrc_cache.json`, flushed every 20 lookups so a
+   cancelled run doesn't lose progress, and `esc` cancels cleanly at any
+   point. Turn off "Bridge via MusicBrainz..." in Settings to skip this
+   tier entirely and rely on direct ISRC tags + fuzzy matching only.
 
 3. **Fuzzy fallback.** For anything left unmatched — no ISRC either
    side — a normalized artist/title similarity score (Levenshtein-based,

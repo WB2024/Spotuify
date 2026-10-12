@@ -56,11 +56,16 @@ type Result struct {
 	Confidence float64 // 1.0 for ISRC, similarity score (0..1) for fuzzy, 0 for none
 }
 
-// Resolver bridges a Spotify track's ISRC to MusicBrainz Recording IDs
-// that might match a local file — see library.MusicBrainzResolver, the
-// concrete implementation. A nil Resolver skips tier 2 entirely.
+// Resolver bridges a batch of Spotify tracks' ISRCs to MusicBrainz
+// Recording IDs that might match a local file — see
+// library.MusicBrainzResolver, the concrete implementation. A nil Resolver
+// skips tier 2 entirely. Batched (rather than one ISRC at a time) because
+// MusicBrainz's search service can resolve many ISRCs in a single
+// rate-limited request — see library.MusicBrainzResolver.RecordingsForISRCs
+// — which is what keeps bridging thousands of unmatched tracks in one
+// large batch from taking the better part of an hour.
 type Resolver interface {
-	RecordingsForISRC(ctx context.Context, isrc string) ([]string, error)
+	RecordingsForISRCs(ctx context.Context, isrcs []string) map[string][]string
 }
 
 // Options controls the optional matching tiers.
@@ -134,13 +139,32 @@ func All(ctx context.Context, items []spotifyapi.PlaylistTrackItem, idx *library
 				pending = append(pending, i)
 			}
 		}
-		for n, i := range pending {
+
+		// Chunked at library.MBISRCBatchSize rather than one
+		// opts.Resolver call for the whole pending list, so bridgeProgress
+		// still updates roughly once per MusicBrainz request (same cadence
+		// as the old one-ISRC-per-request loop), just covering many more
+		// tracks per tick now that each request resolves a batch instead
+		// of a single ISRC.
+		done := 0
+		for start := 0; start < len(pending); start += library.MBISRCBatchSize {
 			if ctx.Err() != nil {
 				break
 			}
-			isrc := results[i].Item.Track.ExternalIDs.ISRC
-			mbids, err := opts.Resolver.RecordingsForISRC(ctx, isrc)
-			if err == nil {
+			end := start + library.MBISRCBatchSize
+			if end > len(pending) {
+				end = len(pending)
+			}
+			chunk := pending[start:end]
+
+			isrcs := make([]string, len(chunk))
+			for n, i := range chunk {
+				isrcs[n] = results[i].Item.Track.ExternalIDs.ISRC
+			}
+			resolved := opts.Resolver.RecordingsForISRCs(ctx, isrcs)
+
+			for n, i := range chunk {
+				mbids := resolved[isrcs[n]]
 				var candidates []*library.Track
 				for _, mbid := range mbids {
 					candidates = append(candidates, idx.ByMBID(mbid)...)
@@ -152,8 +176,10 @@ func All(ctx context.Context, items []spotifyapi.PlaylistTrackItem, idx *library
 					used[t.Path] = true
 				}
 			}
+
+			done += len(chunk)
 			if bridgeProgress != nil {
-				bridgeProgress(n+1, len(pending))
+				bridgeProgress(done, len(pending))
 			}
 		}
 	}

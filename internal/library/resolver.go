@@ -31,6 +31,74 @@ func NewMusicBrainzResolver(cachePath string) *MusicBrainzResolver {
 	}
 }
 
+// MBISRCBatchSize is the most ISRCs RecordingsForISRCs will ever put in one
+// MusicBrainz search request - see musicbrainzClient.RecordingsForISRCs for
+// why that request shape is safe up to (and a bit past) this size. Callers
+// batching a larger pending list (see match.All) should chunk into groups
+// of at most this size themselves, both to get a progress update after each
+// chunk and because RecordingsForISRCs only sub-chunks defensively, not for
+// efficiency - one call per chunk is the point.
+const MBISRCBatchSize = 40
+
+// RecordingsForISRCs resolves many ISRCs at once: whatever's already cached
+// is returned immediately with no network call at all, and the rest is
+// resolved via as few MusicBrainz search requests as possible (chunks of at
+// most MBISRCBatchSize - see musicbrainzClient.RecordingsForISRCs) instead
+// of one request per ISRC. This is what makes bridging a few thousand
+// unmatched tracks in one big batch take well under a minute of MusicBrainz
+// calls instead of the better part of an hour at 1 request/second serially.
+//
+// A chunk that fails outright (network error, etc.) is left unresolved in
+// the cache rather than aborting the whole call - those ISRCs just won't
+// have a tier-2 match this run, same leniency RecordingsForISRC already has
+// per-lookup, and they'll be retried on the next run since nothing gets
+// marked Resolved for them.
+func (r *MusicBrainzResolver) RecordingsForISRCs(ctx context.Context, isrcs []string) map[string][]string {
+	out := make(map[string][]string, len(isrcs))
+
+	var pending []string
+	seen := make(map[string]bool, len(isrcs))
+	for _, isrc := range isrcs {
+		if isrc == "" || seen[isrc] {
+			continue
+		}
+		seen[isrc] = true
+		if e, ok := r.cache.Entries[isrc]; ok && e.Resolved {
+			if len(e.RecordingIDs) > 0 {
+				out[isrc] = e.RecordingIDs
+			}
+			continue
+		}
+		pending = append(pending, isrc)
+	}
+
+	for start := 0; start < len(pending); start += MBISRCBatchSize {
+		if ctx.Err() != nil {
+			return out
+		}
+		end := start + MBISRCBatchSize
+		if end > len(pending) {
+			end = len(pending)
+		}
+		batch := pending[start:end]
+
+		resolved, err := r.client.RecordingsForISRCs(ctx, batch)
+		if err != nil {
+			continue
+		}
+		for _, isrc := range batch {
+			ids := resolved[isrc]
+			r.cache.Entries[isrc] = mbCacheEntry{RecordingIDs: ids, Resolved: true}
+			r.noteChange()
+			if len(ids) > 0 {
+				out[isrc] = ids
+			}
+		}
+	}
+
+	return out
+}
+
 // RecordingsForISRC returns the MusicBrainz Recording IDs associated with
 // isrc, from cache if known, otherwise via the (rate-limited) API — which
 // is then cached, flushing to disk every 20 new lookups so a cancelled run
