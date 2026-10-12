@@ -42,6 +42,7 @@ const (
 	rowDownloadCovers
 	rowResolveMBID
 	rowFuzzyMatch
+	rowMatchExportsOnly
 
 	// Lidarr option rows: their choices come from Lidarr itself (see
 	// lidarrOptions), so they cycle rather than take typed input.
@@ -81,6 +82,7 @@ type SettingsModel struct {
 	downloadCovers        bool
 	resolveMBID           bool
 	fuzzyMatch            bool
+	matchExportsOnly      bool
 	feishinSortDescending bool
 
 	// Lidarr choices. The option lists are fetched from Lidarr on first use
@@ -143,6 +145,7 @@ func newSettings(cfg *config.Config) SettingsModel {
 		downloadCovers:        cfg.DownloadCovers,
 		resolveMBID:           cfg.ResolveMusicBrainzISRC,
 		fuzzyMatch:            cfg.EnableFuzzyMatching,
+		matchExportsOnly:      cfg.MatchExportsOnly,
 		feishinSortDescending: cfg.FeishinSortDescending,
 		lidarrRootFolder:      cfg.LidarrRootFolder,
 		lidarrQualityID:       cfg.LidarrQualityProfileID,
@@ -523,7 +526,7 @@ func (s SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd, settin
 			cmd := s.inputs[s.cursor].Focus()
 			return s, cmd, settingsNone
 
-		case s.cursor == rowDownloadCovers, s.cursor == rowResolveMBID, s.cursor == rowFuzzyMatch, s.cursor == rowLidarrAddSearch, s.cursor == rowFeishinSortDescending:
+		case s.cursor == rowDownloadCovers, s.cursor == rowResolveMBID, s.cursor == rowFuzzyMatch, s.cursor == rowMatchExportsOnly, s.cursor == rowLidarrAddSearch, s.cursor == rowFeishinSortDescending:
 			s.toggle(s.cursor)
 			return s, nil, settingsNone
 
@@ -585,6 +588,8 @@ func (s *SettingsModel) toggle(row settingsRow) {
 		s.resolveMBID = !s.resolveMBID
 	case rowFuzzyMatch:
 		s.fuzzyMatch = !s.fuzzyMatch
+	case rowMatchExportsOnly:
+		s.matchExportsOnly = !s.matchExportsOnly
 	case rowLidarrAddSearch:
 		s.lidarrAddSearch = !s.lidarrAddSearch
 	case rowFeishinSortDescending:
@@ -627,6 +632,7 @@ func (s *SettingsModel) doSave() bool {
 	s.cfg.NavidromeGroup = strings.TrimSpace(s.inputs[rowNavidromeGroup].Value())
 	s.cfg.ResolveMusicBrainzISRC = s.resolveMBID
 	s.cfg.EnableFuzzyMatching = s.fuzzyMatch
+	s.cfg.MatchExportsOnly = s.matchExportsOnly
 	s.cfg.NavidromeAPIURL = strings.TrimRight(strings.TrimSpace(s.inputs[rowNavidromeAPIURL].Value()), "/")
 	s.cfg.NavidromeUsername = strings.TrimSpace(s.inputs[rowNavidromeAPIUsername].Value())
 	s.cfg.NavidromePassword = strings.TrimSpace(s.inputs[rowNavidromeAPIPassword].Value())
@@ -733,6 +739,7 @@ func (s SettingsModel) renderContent() (string, int, map[settingsRow]int) {
 		textRow(body, rowNavidromeGroup, "Navidrome group", "Prefix before the playlist name in the #PLAYLIST directive — \"/\" nests as folders in Navidrome/Feishin's sidebar. Overridable per playlist from the Match screen's playlist list (press g).")
 		toggleRow(body, rowResolveMBID, "Bridge via MusicBrainz for tracks with no ISRC tag (rate-limited, cached)", s.resolveMBID)
 		toggleRow(body, rowFuzzyMatch, "Fuzzy-match tracks with no ISRC/MusicBrainz data", s.fuzzyMatch)
+		toggleRow(body, rowMatchExportsOnly, "Match: use local exports only (never call Spotify — playlists with no local export are skipped)", s.matchExportsOnly)
 	})
 
 	group("Navidrome Cover Art Upload (optional)", func(body *strings.Builder) {

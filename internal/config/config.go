@@ -120,6 +120,16 @@ type Config struct {
 	// artist/title text similarity against the local library.
 	EnableFuzzyMatching bool
 
+	// MatchExportsOnly, when true, makes Match to Local Library use only
+	// playlists that already have a local export (see export.ScanExports)
+	// and never fall back to fetching one from Spotify — a playlist with no
+	// local export is skipped instead. Off by default, since the normal
+	// behavior (reuse an export if one exists, otherwise fetch it) is more
+	// convenient day to day; this exists for someone who's deliberately
+	// exported everything up front specifically to guarantee a match run
+	// makes zero Spotify API calls, regardless of what's missing.
+	MatchExportsOnly bool
+
 	// TokenCachePath is where the OAuth token (incl. refresh token) is
 	// persisted between runs so the user isn't asked to log in every time.
 	TokenCachePath string
@@ -165,6 +175,7 @@ const (
 	envNavidromeGroup   = "SPOTUIFY_NAVIDROME_GROUP"
 	envResolveMBISRC    = "SPOTUIFY_RESOLVE_MUSICBRAINZ_ISRC"
 	envEnableFuzzy      = "SPOTUIFY_FUZZY_MATCH"
+	envMatchExportsOnly = "SPOTUIFY_MATCH_EXPORTS_ONLY"
 	envNavidromeAPIURL  = "SPOTUIFY_NAVIDROME_API_URL"
 	envNavidromeAPIUser = "SPOTUIFY_NAVIDROME_API_USERNAME"
 	envNavidromeAPIPass = "SPOTUIFY_NAVIDROME_API_PASSWORD"
@@ -217,6 +228,7 @@ func Load() (*Config, error) {
 	downloadCovers := parseBoolDefault(os.Getenv(envDownloadArt), true)
 	resolveMBISRC := parseBoolDefault(os.Getenv(envResolveMBISRC), true)
 	enableFuzzy := parseBoolDefault(os.Getenv(envEnableFuzzy), true)
+	matchExportsOnly := parseBoolDefault(os.Getenv(envMatchExportsOnly), false)
 	feishinSortDesc := parseBoolDefault(os.Getenv(envFeishinSortDesc), false)
 
 	m3u8Dir := os.Getenv(envM3U8Dir)
@@ -256,6 +268,7 @@ func Load() (*Config, error) {
 		ManualMatchesPath:       manualMatchesPath,
 		ResolveMusicBrainzISRC:  resolveMBISRC,
 		EnableFuzzyMatching:     enableFuzzy,
+		MatchExportsOnly:        matchExportsOnly,
 		NavidromeAPIURL:         os.Getenv(envNavidromeAPIURL),
 		NavidromeUsername:       os.Getenv(envNavidromeAPIUser),
 		NavidromePassword:       os.Getenv(envNavidromeAPIPass),
@@ -400,6 +413,7 @@ func (c *Config) Save() error {
 		{envNavidromeGroup, c.NavidromeGroup},
 		{envResolveMBISRC, strconv.FormatBool(c.ResolveMusicBrainzISRC)},
 		{envEnableFuzzy, strconv.FormatBool(c.EnableFuzzyMatching)},
+		{envMatchExportsOnly, strconv.FormatBool(c.MatchExportsOnly)},
 		{envNavidromeAPIURL, c.NavidromeAPIURL},
 		{envNavidromeAPIUser, c.NavidromeUsername},
 		{envNavidromeAPIPass, c.NavidromePassword},

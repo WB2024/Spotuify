@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,7 +37,7 @@ func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.
 			send(ctx, ch, exportEvent{kind: eventStatus, text: fmt.Sprintf("%s: fetched %d/%d tracks", sp.Name, fetched, total)})
 		})
 		if err != nil {
-			send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: err})
+			send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: friendlyFetchError(err)})
 			if rl, locked := spotifyapi.AsRateLimitError(err); locked {
 				skipRest(ctx, ch, queue[i+1:], rl)
 				return
@@ -76,6 +77,22 @@ func runExport(ctx context.Context, client *spotifyapi.Client, exporter *export.
 func skipRest(ctx context.Context, ch chan<- exportEvent, rest []spotifyapi.SimplifiedPlaylist, rl *spotifyapi.RateLimitError) {
 	for _, sp := range rest {
 		send(ctx, ch, exportEvent{kind: eventPlaylistDone, playlistName: sp.Name, err: rl})
+	}
+}
+
+// friendlyFetchError turns a known, playlist-specific fetch failure into a
+// clearer one-line explanation than Spotify's raw response (e.g. "spotify
+// api error 403 on /playlists/.../items: ..."), which is also long enough
+// to get truncated into something like "...spotify api er…" in the Note
+// column anyway. Anything not specifically recognized is returned as-is.
+func friendlyFetchError(err error) error {
+	switch {
+	case spotifyapi.Forbidden(err):
+		return errors.New("Spotify denied access to this playlist's tracks (403 Forbidden) - typically a collaborative/shared playlist owned by someone else, or an old playlist Spotify restricts third-party apps from reading; skipped, nothing else affected")
+	case spotifyapi.NotFound(err):
+		return errors.New("playlist not found on Spotify (404) - it may have been deleted or made private since the list was loaded; skipped")
+	default:
+		return err
 	}
 }
 

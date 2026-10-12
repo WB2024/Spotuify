@@ -210,12 +210,11 @@ func Forbidden(err error) bool {
 }
 
 func asAPIError(err error, target **APIError) bool {
-	apiErr, ok := err.(*APIError)
-	if !ok {
-		return false
-	}
-	*target = apiErr
-	return true
+	// errors.As, not a bare type assertion: callers (PlaylistTracks, etc.)
+	// always wrap this in a fmt.Errorf("...: %w", err) prefix first, which
+	// a plain err.(*APIError) can never see through - NotFound/Forbidden
+	// would otherwise silently never match on a real 404/403.
+	return errors.As(err, target)
 }
 
 func retryAfter(h http.Header, fallback time.Duration) time.Duration {

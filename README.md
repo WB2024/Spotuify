@@ -692,6 +692,15 @@ matching — Match to Local Library reuses each playlist's export instead of
 fetching it from Spotify again (see above), so only playlists with no
 export on disk spend any API calls during the match run.
 
+**For a hard guarantee of zero Spotify calls during a match run**, turn on
+**"Match: use local exports only"** in Settings → Local Library Matching.
+With it on, a playlist with no local export is skipped outright (noted as
+such, same as any other failure) instead of falling back to fetching it
+from Spotify — useful once you've deliberately exported everything up
+front and want matching to never touch the API at all, rather than just
+"probably won't need to." Off by default, since the normal fallback
+behavior is more convenient for everyday use.
+
 Pacing (the paragraph above) and request *volume* are separate levers, and
 slowing the pace down twice still hadn't been enough on its own — so
 Exporting and Matching both also now make one fewer Spotify request per
@@ -706,13 +715,17 @@ pacing and stop-on-lockout protections above.
 
 **A `403 Forbidden` on a specific playlist is a different thing entirely**
 — not rate limiting (that's always `429`), but Spotify saying the app
-doesn't have permission to read that one playlist's tracks, for reasons
-outside this app's control (observed on old, personal playlists — the
-exact cause wasn't pinned down, but it's playlist-specific, not
-account-wide: matching/exporting the rest of the library is unaffected).
-It fails just that one playlist and moves on to the next without
-retrying — no special handling needed, and it doesn't interact with or
-contribute to rate limiting.
+doesn't have permission to read that one playlist's tracks. It fails just
+that one playlist and moves on to the next without retrying — no special
+handling needed, and it doesn't interact with or contribute to rate
+limiting. It's been observed both on old personal playlists for reasons
+never pinned down, and on playlists owned by someone else (collaborative
+or followed, not your own) — the exact cause varies, but it's always
+playlist-specific, never account-wide: matching/exporting the rest of the
+library is unaffected. The Note column reports this with a plain
+explanation of what a 403 means rather than Spotify's raw API response
+text (likewise for a `404`, meaning the playlist was deleted or made
+private since the list was loaded).
 
 ## A note on API access
 

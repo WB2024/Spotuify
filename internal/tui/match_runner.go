@@ -87,6 +87,17 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 			}
 		}
 
+		if full == nil && cfg.MatchExportsOnly {
+			// Settings' "Match: use local exports only" is on and this
+			// playlist has no local export (the exportsByID lookup above
+			// found nothing) - skip it rather than fall back to Spotify, so
+			// a match run can be guaranteed to make zero API calls
+			// regardless of what's missing, rather than just "probably
+			// not many".
+			sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: fmt.Errorf("no local export found - skipped (Settings: Match: use local exports only is enabled)")})
+			continue
+		}
+
 		if full == nil {
 			// No separate GET /playlists/{id} call: that only adds a
 			// follower count over what /me/playlists already returned for
@@ -105,7 +116,7 @@ func runMatch(ctx context.Context, client *spotifyapi.Client, httpClient *http.C
 				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventStatus, text: fmt.Sprintf("%s: fetched %d/%d tracks", sp.Name, fetched, total)})
 			})
 			if err != nil {
-				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: err})
+				sendMatchEvent(ctx, ch, matchEvent{kind: matchEventPlaylistDone, playlistName: sp.Name, err: friendlyFetchError(err)})
 				if rl, locked := spotifyapi.AsRateLimitError(err); locked {
 					skipRestMatch(ctx, ch, queue[i+1:], rl)
 					return
